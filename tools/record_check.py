@@ -143,6 +143,39 @@ def cmd_stress(cycles):
     return ok
 
 
+def cmd_long(seconds, chunk_s=10.0):
+    """One continuous stream for `seconds`, tone-checked in 10 s chunks."""
+    import queue
+
+    with micarray.Console() as c:
+        mode = c.cmd("info")["mode"]
+        c.cmd("src tone")
+        dev, d = micarray.find_input()
+        q = queue.Queue()
+        st0 = c.cmd("stats")
+        chunk = int(chunk_s * FS)
+        buf, n_chunks, bad = [], 0, 0
+        with sd.InputStream(device=dev, callback=lambda x, f, t, s: q.put(x.copy()), **stream_args(d)):
+            t_end = time.time() + seconds
+            while time.time() < t_end or q.qsize():
+                buf.append(q.get())
+                if sum(len(b) for b in buf) >= chunk:
+                    x = to_float(np.concatenate(buf))
+                    buf = []
+                    good = check_tones(np.vstack([x[:int(0.3 * FS)], x]), mode, verbose=False) if n_chunks else True
+                    n_chunks += 1
+                    bad += not good
+                    st = c.cmd("stats")
+                    print(f"  {n_chunks * chunk_s:5.0f} s: {'OK' if good else 'GLITCH'}  underruns={st['usb_underruns']} "
+                          f"ring_full={st['usb_ring_full']} dma_overruns={st['dma_overruns']} "
+                          f"core1={st['core1_load']:.2f} doa={st['doa_load']:.2f}", flush=True)
+        st1 = c.cmd("stats")
+        c.cmd("src mics")
+    ok = bad == 0 and st1["usb_underruns"] == st0["usb_underruns"] and st1["dma_overruns"] == st0["dma_overruns"]
+    print("LONG TEST", "PASS" if ok else "FAIL", f"({n_chunks} chunks, {bad} with glitches)")
+    return ok
+
+
 def main():
     what = sys.argv[1] if len(sys.argv) > 1 else "tone"
     arg = float(sys.argv[2]) if len(sys.argv) > 2 else None
@@ -150,6 +183,8 @@ def main():
         ok = cmd_tone(arg or 5)
     elif what == "stress":
         ok = cmd_stress(int(arg or 20))
+    elif what == "long":
+        ok = cmd_long(arg or 600)
     else:
         sys.exit(__doc__)
     sys.exit(0 if ok else 1)

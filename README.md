@@ -1,0 +1,148 @@
+# Sipeed 6+1 Mic Array on a Raspberry Pi Pico 2
+
+The firmware turns the Sipeed R6+1 microphone array and a Pico 2 (RP2350) into a standard USB device with two functions:
+
+- **USB microphone (UAC2), driverless.** Two audio modes, switchable over serial:
+  - `stereo` (default): 48 kHz / 24-bit. Channel 1 is the **steered beam**, channel 2 is the raw centre mic.
+  - `raw8`: 48 kHz / 16-bit. Channels 1–6 are the ring mics, channel 7 is the centre mic, channel 8 is the beam. This mode is for PC-side processing such as ODAS or your own Python code.
+- **USB serial (CDC).** It streams the sound direction as JSON lines and accepts commands for the LEDs, beam steering and gating, mode, and calibration.
+
+The 12-LED ring shows where the sound comes from.
+
+## Wiring
+
+Connect the module's J2/J3 headers (names as printed on the board) to the Pico 2:
+
+| Module | Pico 2 | Pin |
+|---|---|---|
+| MIC_CK | GP10 | 14 |
+| MIC_WS | GP11 | 15 |
+| MIC_D0 | GP12 | 16 |
+| MIC_D1 | GP13 | 17 |
+| MIC_D2 | GP14 | 19 |
+| MIC_D3 | GP15 | 20 |
+| LED_CK | GP18 | 24 |
+| LED_DA | GP19 | 25 |
+| VIN | VBUS (5 V) | 40 |
+| GND | GND | 38 |
+
+Power and logic levels:
+- VIN is 5 V. The board has its own 3.3 V regulator for the mics and level shifters on the LED lines, so the Pico's 3.3 V logic is fine.
+- The LED brightness is capped (`led bright`, default 4/31). At full white the ring draws about 720 mA.
+
+## Build and flash
+
+PlatformIO, run from PowerShell:
+
+```
+pio run
+python tools\flash.py
+```
+
+- **First flash:** hold BOOTSEL while plugging in. `flash.py` copies the UF2 to the `RP2350` drive.
+- **Later flashes:** `flash.py` sends the 1200 bps touch to reboot the board into BOOTSEL by itself.
+- **Port and PIDs:** the board appears on a new COM port, with VID `1209` and PID `A6E1` (stereo) or `A6E3` (raw8).
+
+## Angles
+
+All azimuths are degrees **clockwise from mic 0, looking at the LED side**:
+
+- **LEDs:** LED *i* sits at 30·*i*°. LED 0 is next to mic 0.
+- **Ring mics:** mic *k* sits at 60·*k*°.
+- **`offset`:** rotates every reported and commanded angle, so you can define your own "front". The GUI button "Set current sound as 0°" sets it for you.
+
+## Serial protocol
+
+Open the port at any baud **except 1200**, which reboots into BOOTSEL. Assert DTR, because telemetry is only sent while DTR is set.
+
+Every command returns exactly one JSON line: `{"ok":"<cmd>",...}` or `{"err":"..."}`.
+
+| Command | Effect |
+|---|---|
+| `info`, `stats`, `levels`, `map` | Status, CPU/USB counters, per-mic levels, SRP map (72 × 5°). |
+| `mode stereo` / `mode raw8` | USB audio layout. Saves and re-enumerates. |
+| `steer auto` / `steer <deg>` | The beam follows the DOA, or stays fixed at an angle. |
+| `gate off` / `gate on` / `gate <halfwidth>` | Mute the beam (−30 dB) unless sound is detected within ±halfwidth of the steering direction. |
+| `gain <dB>` | Digital gain on the USB audio (default 18). |
+| `led doa` / `led off` / `led static r g b` / `led set i r g b` / `led bright 1..31` | LED ring. |
+| `offset <deg>` | Rotate the angle frame. |
+| `telem <hz>` / `telem off` / `telem json` / `telem odas` | Telemetry rate and format. |
+| `src mics` / `src tone` / `src sim <deg>` | Self-test sources. `tone` puts 500·(k+1) Hz on mic k. `sim` injects a simulated plane wave from `<deg>`. |
+| `tune margin <dB>` / `tune conf <x>` | DOA activity thresholds. |
+| `save`, `defaults`, `reboot`, `bootsel` | Persist settings, reset to defaults, reboot, enter BOOTSEL. |
+
+Telemetry, default 10 Hz:
+
+```
+{"t":12345,"az":357.3,"az_s":356.8,"conf":0.41,"db":-52.0,"floor":-66.1,"act":1,"steer":356.8,"gate":1}
+```
+
+- `az` is this frame's estimate and `az_s` is the tracked direction.
+- `conf` is the SRP-PHAT peak, from 0 to 1.
+- `db` / `floor` are the centre-mic level and the noise floor.
+- `act` means the frame is above the floor and confident.
+
+`telem odas` instead sends ODAS-SSL-style lines: `{"timeStamp":n,"src":[{"x","y","z","E"}]}`.
+
+## Browser GUI
+
+Open `web/index.html` in Chrome or Edge, then press **Connect** and pick the mic array. If the browser blocks the `file://` page, serve it locally with `python -m http.server` in `web/` and open `localhost:8000`.
+
+The GUI provides:
+- A live compass showing the LEDs, the mics, the SRP map, the direction needle, and the beam/gate wedge. Clicking the compass steers the beam.
+- Controls for LEDs, gain, gate, audio mode, calibration and the test sources.
+- Stats and a command log.
+
+## Windows notes
+
+- **Stereo mode** works as an ordinary microphone ("Microphone (Sipeed Mic Array)") in every app.
+- **Voice Clarity effect pack.** Windows 11 attaches it to new USB microphones, and it changes the raw signal:
+  - It applies AGC and noise suppression.
+  - In shared mode it narrows the **8-channel** endpoint to 2 channels.
+
+  For `raw8` use, open *Settings → System → Sound → Microphone (Sipeed Mic Array 8ch) → Audio enhancements: Off*. Alternatively, use an app that opens the device through WASAPI exclusive mode or WDM-KS; the tools here use WDM-KS.
+- **Linux** (e.g. a Raspberry Pi running ODAS) sees a standard 8-channel ALSA card in `raw8` mode.
+
+## ODAS
+
+ODAS (the open-source sound localisation and tracking library) is built inside WSL by `odas/build_odas_wsl.sh`. That script needs no root: it downloads the `.deb` packages and unpacks them into a private sysroot.
+
+```
+wsl -e bash /mnt/c/<path>/sipeed_mic_array_pico2/odas/build_odas_wsl.sh
+python tools\odas_bridge.py --seconds 20 --play
+```
+
+- The bridge pipes the 8-channel stream (decimated to 16 kHz) into `odaslive` with `odas/sipeed_6p1.cfg`, which holds the real mic geometry in the firmware's frame.
+- It prints ODAS-tracked sources next to the firmware's own DOA.
+- On Linux, switch the config's `raw.interface` to `soundcard`.
+
+## Tests (`tools/`)
+
+| Script | Checks |
+|---|---|
+| `record_check.py tone [s]` | Channel map (each mic channel at its own tone frequency), bit-exact continuity, no zero runs. |
+| `record_check.py stress [n]` | Opens and closes the stream n times; the console must answer every time. This is the freeze that broke the old firmware. |
+| `record_check.py long [s]` | One continuous stream, checked in 10 s chunks, plus underrun and overrun counters. |
+| `acoustic_test.py [--beam]` | Plays a sweep and noise on one laptop speaker (raising the volume only during playback). It checks per-mic SNR, balance and correlation, compares the firmware DOA with an offline GCC-PHAT estimate, and measures beam gain toward and away from the source. |
+| `odas_bridge.py` | ODAS live from the USB stream. |
+
+## Design notes
+
+- **I2S capture.**
+  - A PIO0 state machine generates BCK and WS at an exact /25 divider, which is why the sys clock is 153.6 MHz.
+  - Four PIO1 follower state machines, one per data line, sample on each BCK rising edge and autopush ready 32-bit slots.
+  - Endless DMA streams them into 8 KB rings, so no CPU work is needed.
+- **I2S bit position.** The datasheet describes Philips I2S, but raw captures (`raw <slot>`) put the sign bit at BCK position 0. The firmware decodes with offset 0. The data has 18 significant bits followed by zero padding.
+- **Core 1 (audio):**
+  - DC block.
+  - Delay-and-sum beamformer over all 7 mics, using 4-tap Lagrange fractional delays.
+  - Gate.
+  - 48→16 kHz decimation for the DOA.
+  - Writes USB frames into a lock-free ring.
+- **USB.** The USB ISR (`tud_audio_tx_done_isr`) moves the ring into TinyUSB's FIFO and never waits. TinyUSB's IN flow control sends 47, 48 or 49 frames per packet to absorb clock drift. The audio function has no controls the host can change, so no host request can reconfigure anything mid-stream.
+- **Core 0 (DOA):**
+  - SRP-PHAT across all 21 mic pairs at 300–4000 Hz.
+  - The lag sums run on the M33's dual 16-bit MAC instructions (`SMLAD`/`SMLSD`) in Q12.
+  - 62.5 estimates per second, at about 50 % of one core.
+- **Load.** Core 1 runs at about 45 %.
+- **Directivity.** The beam's directivity is limited by the 8 cm aperture: about 1–2 dB below 1.4 kHz, and 5–9 dB of rejection toward-versus-away above that.

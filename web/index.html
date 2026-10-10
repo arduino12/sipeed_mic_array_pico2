@@ -1,0 +1,405 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mic Array Console</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --panel: #ffffff; --ink: #1d2330; --muted: #6a7385; --line: #dfe3ea;
+    --accent: #e8590c; --accent-soft: #ffe3d1; --beam: #1c7ed6; --beam-soft: rgba(28,126,214,.14);
+    --ok: #2b8a3e; --warn: #e67700; --bad: #c92a2a; --map: rgba(232,89,12,.28);
+    --led-off: #d5dae3; --mic: #495057;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #0f1218; --panel: #171b23; --ink: #e6e9ef; --muted: #8b93a5; --line: #2a303c;
+      --accent: #ff7a2e; --accent-soft: #3a2416; --beam: #4dabf7; --beam-soft: rgba(77,171,247,.16);
+      --ok: #51cf66; --warn: #fcc419; --bad: #ff6b6b; --map: rgba(255,122,46,.30);
+      --led-off: #2c3340; --mic: #adb5bd;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #0f1218; --panel: #171b23; --ink: #e6e9ef; --muted: #8b93a5; --line: #2a303c;
+    --accent: #ff7a2e; --accent-soft: #3a2416; --beam: #4dabf7; --beam-soft: rgba(77,171,247,.16);
+    --ok: #51cf66; --warn: #fcc419; --bad: #ff6b6b; --map: rgba(255,122,46,.30);
+    --led-off: #2c3340; --mic: #adb5bd;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+         font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  header { display: flex; align-items: center; gap: 12px; padding: 12px 16px;
+           border-bottom: 1px solid var(--line); background: var(--panel); flex-wrap: wrap; }
+  header h1 { font-size: 16px; margin: 0; font-weight: 650; letter-spacing: .2px; }
+  .pill { font-size: 12px; padding: 2px 8px; border-radius: 99px; background: var(--line); color: var(--muted); }
+  .pill.on { background: var(--accent-soft); color: var(--accent); }
+  .spacer { flex: 1; }
+  button, select, input[type=number], input[type=text] {
+    font: inherit; color: var(--ink); background: var(--panel); border: 1px solid var(--line);
+    border-radius: 8px; padding: 6px 10px; }
+  button { cursor: pointer; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+  button:disabled { opacity: .5; cursor: default; }
+  button.seg { border-radius: 0; margin-left: -1px; }
+  button.seg:first-child { border-radius: 8px 0 0 8px; margin-left: 0; }
+  button.seg:last-child { border-radius: 0 8px 8px 0; }
+  button.seg.sel { background: var(--accent-soft); color: var(--accent); border-color: var(--accent); position: relative; }
+  main { display: grid; grid-template-columns: minmax(300px, 520px) minmax(300px, 1fr); gap: 16px;
+         padding: 16px; max-width: 1200px; margin: 0 auto; }
+  @media (max-width: 760px) { main { grid-template-columns: 1fr; } }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; }
+  .card h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted);
+             margin: 0 0 10px; font-weight: 650; }
+  .stack { display: grid; gap: 16px; align-content: start; }
+  .row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 6px 0; }
+  .row label { color: var(--muted); min-width: 92px; }
+  input[type=range] { flex: 1; min-width: 120px; accent-color: var(--accent); }
+  .big { font-size: 40px; font-weight: 700; font-variant-numeric: tabular-nums; line-height: 1; }
+  .kv { display: grid; grid-template-columns: auto 1fr; gap: 2px 12px; font-variant-numeric: tabular-nums; }
+  .kv span:nth-child(odd) { color: var(--muted); }
+  .bar { height: 8px; background: var(--line); border-radius: 99px; overflow: hidden; flex: 1; min-width: 100px; }
+  .bar > div { height: 100%; background: var(--accent); width: 0; transition: width .1s; }
+  #compass { width: 100%; height: auto; display: block; cursor: crosshair; touch-action: manipulation; }
+  .hint { color: var(--muted); font-size: 12px; }
+  #log { height: 160px; overflow: auto; font: 12px/1.4 ui-monospace, Consolas, monospace; background: var(--bg);
+         border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px; white-space: pre-wrap; word-break: break-all; }
+  .err { color: var(--bad); }
+  .muted { color: var(--muted); }
+  #banner { display: none; margin: 16px; padding: 12px 14px; border-radius: 10px; background: var(--accent-soft); color: var(--ink); }
+</style>
+</head>
+<body>
+<header>
+  <h1>Sipeed 6+1 Mic Array</h1>
+  <span id="conn" class="pill">disconnected</span>
+  <span id="modePill" class="pill">–</span>
+  <span class="spacer"></span>
+  <button id="themeBtn" title="Toggle light/dark">◐</button>
+  <button id="connectBtn" class="primary">Connect</button>
+</header>
+<div id="banner"></div>
+<main>
+  <section class="stack">
+    <div class="card">
+      <h2>Direction</h2>
+      <svg id="compass" viewBox="-216 -216 432 432" aria-label="Sound direction compass">
+        <circle r="186" fill="none" stroke="var(--line)" stroke-width="1"/>
+        <circle r="120" fill="none" stroke="var(--line)" stroke-width="1" stroke-dasharray="2 4"/>
+        <path id="gateWedge" fill="var(--beam-soft)" stroke="none"/>
+        <polygon id="srpMap" fill="var(--map)" stroke="var(--accent)" stroke-width="1" stroke-opacity=".6"/>
+        <g id="ticks"></g>
+        <g id="board"></g>
+        <line id="steerLine" x1="0" y1="0" x2="0" y2="-176" stroke="var(--beam)" stroke-width="3" stroke-linecap="round"/>
+        <line id="rawLine" x1="0" y1="0" x2="0" y2="-150" stroke="var(--accent)" stroke-width="1.5" stroke-opacity=".55"/>
+        <g id="needle"><path d="M0,-168 L9,-140 L-9,-140 Z" fill="var(--accent)"/><line x1="0" y1="0" x2="0" y2="-142" stroke="var(--accent)" stroke-width="4" stroke-linecap="round"/></g>
+        <circle r="5" fill="var(--ink)"/>
+      </svg>
+      <div class="hint">Click the ring to steer the beam to that direction; double-click the centre for auto.
+        Blue = beam (and gate window), orange = sound direction, shaded = SRP map.</div>
+    </div>
+    <div class="card">
+      <h2>Live</h2>
+      <div class="row"><div class="big" id="azBig">—</div><div class="muted" style="font-size:18px">°</div>
+        <span class="spacer"></span><span id="actPill" class="pill">idle</span></div>
+      <div class="row"><label>confidence</label><div class="bar"><div id="confBar"></div></div><span id="confTxt" class="muted">–</span></div>
+      <div class="row"><label>level</label><div class="bar"><div id="lvlBar"></div></div><span id="lvlTxt" class="muted">–</span></div>
+    </div>
+  </section>
+  <section class="stack">
+    <div class="card">
+      <h2>Beam</h2>
+      <div class="row"><label>steering</label>
+        <button class="seg" id="steerAuto">Auto (follow)</button><button class="seg" id="steerFixed">Fixed</button>
+        <input type="number" id="steerDeg" min="0" max="359" step="1" style="width:80px"> °</div>
+      <div class="row"><label>gate</label>
+        <button class="seg" id="gateOff">Off</button><button class="seg" id="gateOn">On</button>
+        <input type="range" id="gateWidth" min="5" max="90" step="1"><span id="gateTxt" class="muted"></span></div>
+      <div class="row"><label>gain</label><input type="range" id="gain" min="-20" max="48" step="1"><span id="gainTxt" class="muted"></span></div>
+      <div class="hint">Gate mutes the beam (−30 dB) unless a sound is detected inside the window around the steering direction.</div>
+    </div>
+    <div class="card">
+      <h2>LED ring</h2>
+      <div class="row"><label>mode</label>
+        <button class="seg" data-led="doa">Direction</button><button class="seg" data-led="static">Colour</button><button class="seg" data-led="off">Off</button>
+        <input type="color" id="ledColor" value="#003c78" title="static colour"></div>
+      <div class="row"><label>brightness</label><input type="range" id="bright" min="1" max="31" step="1"><span id="brightTxt" class="muted"></span></div>
+      <div class="hint">Above ~10 the ring can draw more than a laptop port likes at full white.</div>
+    </div>
+    <div class="card">
+      <h2>USB audio &amp; calibration</h2>
+      <div class="row"><label>mode</label>
+        <button class="seg" data-mode="stereo">Stereo (beam + centre)</button><button class="seg" data-mode="raw8">8-ch raw</button></div>
+      <div class="row"><label>front offset</label><input type="number" id="offset" min="0" max="359" step="1" style="width:80px"> °
+        <button id="frontBtn">Set current sound as 0°</button></div>
+      <div class="row"><label>source</label>
+        <select id="src"><option value="mics">microphones</option><option value="tone">test tones</option><option value="sim">simulated source</option></select>
+        <input type="number" id="simDeg" value="90" min="0" max="359" style="width:80px"> °</div>
+      <div class="row"><button id="saveBtn">Save settings</button><button id="rebootBtn">Reboot</button></div>
+    </div>
+    <div class="card">
+      <h2>System</h2>
+      <div class="kv" id="sys"></div>
+      <div class="row" style="margin-top:10px"><input type="text" id="cmdIn" placeholder="command, e.g. help" style="flex:1"><button id="cmdBtn">Send</button></div>
+      <div id="log"></div>
+    </div>
+  </section>
+</main>
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const NS = "http://www.w3.org/2000/svg";
+const S = { port: null, writer: null, pending: [], info: null, telem: null, map: null, connected: false };
+
+// ---------- theme ----------
+try { const t = localStorage.getItem("theme"); if (t) document.documentElement.dataset.theme = t; } catch (e) {}
+$("themeBtn").onclick = () => {
+  const cur = document.documentElement.dataset.theme ||
+    (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+  const next = cur === "dark" ? "light" : "dark";
+  document.documentElement.dataset.theme = next;
+  try { localStorage.setItem("theme", next); } catch (e) {}
+};
+
+// ---------- geometry (az clockwise from the top) ----------
+const pol = (deg, r) => [r * Math.sin(deg * Math.PI / 180), -r * Math.cos(deg * Math.PI / 180)];
+function el(tag, attrs, parent) {
+  const e = document.createElementNS(NS, tag);
+  for (const k in attrs) e.setAttribute(k, attrs[k]);
+  if (parent) parent.appendChild(e);
+  return e;
+}
+(function drawTicks() {
+  const g = $("ticks");
+  for (let a = 0; a < 360; a += 30) {
+    const [x1, y1] = pol(a, 178), [x2, y2] = pol(a, 186);
+    el("line", { x1, y1, x2, y2, stroke: "var(--muted)", "stroke-width": 1 }, g);
+    const [tx, ty] = pol(a, 196);
+    const t = el("text", { x: tx, y: ty + 4, "text-anchor": "middle", "font-size": 11, fill: "var(--muted)" }, g);
+    t.textContent = a;
+  }
+})();
+const ledDots = [], micDots = [];
+(function drawBoard() {
+  const g = $("board");
+  for (let i = 0; i < 12; i++) ledDots.push(el("circle", { r: 9, fill: "var(--led-off)" }, g));
+  for (let k = 0; k < 7; k++) {
+    const m = el("g", {}, g);
+    el("rect", { x: -5, y: -5, width: 10, height: 10, rx: 2, fill: "var(--mic)" }, m);
+    const t = el("text", { "text-anchor": "middle", "font-size": 10, fill: "var(--muted)" }, m);
+    t.textContent = k < 6 ? `m${k}` : "c";
+    micDots.push({ g: m, label: t });
+  }
+})();
+
+// ---------- serial ----------
+const enc = new TextEncoder();
+function log(s, cls) {
+  const L = $("log"), d = document.createElement("div");
+  if (cls) d.className = cls;
+  d.textContent = s;
+  L.appendChild(d);
+  while (L.childNodes.length > 200) L.removeChild(L.firstChild);
+  L.scrollTop = L.scrollHeight;
+}
+function cmd(line, quiet) {
+  if (!S.writer) return Promise.reject(new Error("not connected"));
+  return new Promise((resolve, reject) => {
+    const p = { line, resolve, reject, quiet };
+    p.timer = setTimeout(() => { const i = S.pending.indexOf(p); if (i >= 0) S.pending.splice(i, 1); reject(new Error("timeout: " + line)); }, 3000);
+    S.pending.push(p);
+    if (!quiet) log("> " + line, "muted");
+    S.writer.write(enc.encode(line + "\n")).catch(reject);
+  });
+}
+function handleLine(line) {
+  if (!line) return;
+  let m;
+  try { m = JSON.parse(line); } catch (e) { log(line); return; }
+  if ("ok" in m || "err" in m) {
+    const p = S.pending.shift();
+    if (p) { clearTimeout(p.timer); if (!p.quiet || m.err) log(line, m.err ? "err" : ""); p.resolve(m); }
+    return;
+  }
+  if ("az" in m) { S.telem = m; S.telemAt = performance.now(); }
+}
+async function readLoop() {
+  const dec = new TextDecoderStream();
+  S.closed = S.port.readable.pipeTo(dec.writable).catch(() => {});
+  const r = dec.readable.getReader();
+  S.reader = r;
+  let buf = "";
+  try {
+    while (true) {
+      const { value, done } = await r.read();
+      if (done) break;
+      buf += value;
+      let i;
+      while ((i = buf.indexOf("\n")) >= 0) { handleLine(buf.slice(0, i).trim()); buf = buf.slice(i + 1); }
+    }
+  } catch (e) { /* device gone */ }
+  disconnected();
+}
+async function connect() {
+  if (!("serial" in navigator)) { banner("This browser has no Web Serial. Use Chrome or Edge on desktop."); return; }
+  try {
+    S.port = await navigator.serial.requestPort({ filters: [{ usbVendorId: 0x1209 }, { usbVendorId: 0x2e8a }] });
+    await S.port.open({ baudRate: 115200 });          // never 1200: that reboots into BOOTSEL
+    await S.port.setSignals({ dataTerminalReady: true }); // firmware only sends telemetry with DTR
+    S.writer = S.port.writable.getWriter();
+    S.connected = true;
+    $("conn").textContent = "connected"; $("conn").classList.add("on");
+    $("connectBtn").textContent = "Disconnect";
+    banner();
+    readLoop();
+    await refreshInfo();
+    await cmd("telem 20", true);
+  } catch (e) { log(String(e), "err"); }
+}
+function disconnected() {
+  S.connected = false; S.writer = null;
+  S.pending.forEach((p) => { clearTimeout(p.timer); p.reject(new Error("disconnected")); });
+  S.pending = [];
+  $("conn").textContent = "disconnected"; $("conn").classList.remove("on");
+  $("connectBtn").textContent = "Connect";
+}
+async function disconnect() {
+  try { S.reader && await S.reader.cancel(); } catch (e) {}
+  try { S.writer && S.writer.releaseLock(); } catch (e) {}
+  try { await S.closed; await S.port.close(); } catch (e) {}
+  disconnected();
+}
+$("connectBtn").onclick = () => (S.connected ? disconnect() : connect());
+function banner(msg) { const b = $("banner"); b.style.display = msg ? "block" : "none"; b.textContent = msg || ""; }
+
+// ---------- state -> UI ----------
+async function refreshInfo() {
+  const i = await cmd("info", true);
+  S.info = i;
+  $("modePill").textContent = i.mode === "raw8" ? "8-ch raw" : "stereo";
+  $("modePill").classList.add("on");
+  sel("[data-mode]", (b) => b.dataset.mode === i.mode);
+  setSeg("steerAuto", i.steer === "auto"); setSeg("steerFixed", i.steer !== "auto");
+  if (document.activeElement !== $("steerDeg")) $("steerDeg").value = Math.round(i.steer_az);
+  setSeg("gateOn", !!i.gate); setSeg("gateOff", !i.gate);
+  $("gateWidth").value = i.gate_width; $("gateTxt").textContent = `±${Math.round(i.gate_width)}°`;
+  $("gain").value = i.gain_db; $("gainTxt").textContent = `${i.gain_db} dB`;
+  sel("[data-led]", (b) => b.dataset.led === i.led);
+  $("bright").value = i.bright; $("brightTxt").textContent = i.bright;
+  if (document.activeElement !== $("offset")) $("offset").value = Math.round(i.offset);
+  $("src").value = i.src;
+}
+function setSeg(id, on) { $(id).classList.toggle("sel", on); }
+function sel(q, pred) { document.querySelectorAll(q).forEach((b) => b.classList.toggle("sel", pred(b))); }
+async function act(line) { try { await cmd(line); await refreshInfo(); } catch (e) { log(String(e), "err"); } }
+
+$("steerAuto").onclick = () => act("steer auto");
+$("steerFixed").onclick = () => act(`steer ${$("steerDeg").value || 0}`);
+$("steerDeg").onchange = () => act(`steer ${$("steerDeg").value || 0}`);
+$("gateOn").onclick = () => act("gate on");
+$("gateOff").onclick = () => act("gate off");
+$("gateWidth").oninput = () => { $("gateTxt").textContent = `±${$("gateWidth").value}°`; };
+$("gateWidth").onchange = () => act(`gate ${$("gateWidth").value}`);
+$("gain").oninput = () => { $("gainTxt").textContent = `${$("gain").value} dB`; };
+$("gain").onchange = () => act(`gain ${$("gain").value}`);
+document.querySelectorAll("[data-led]").forEach((b) => b.onclick = () => {
+  if (b.dataset.led === "static") { const c = $("ledColor").value; act(`led static ${parseInt(c.slice(1, 3), 16)} ${parseInt(c.slice(3, 5), 16)} ${parseInt(c.slice(5, 7), 16)}`); }
+  else act(`led ${b.dataset.led}`);
+});
+$("ledColor").onchange = () => document.querySelector('[data-led="static"]').click();
+$("bright").oninput = () => { $("brightTxt").textContent = $("bright").value; };
+$("bright").onchange = () => act(`led bright ${$("bright").value}`);
+$("offset").onchange = () => act(`offset ${$("offset").value || 0}`);
+$("frontBtn").onclick = () => {
+  if (!S.telem || !S.info) return;
+  // make the current smoothed direction read 0 deg
+  act(`offset ${(((S.info.offset - S.telem.az_s) % 360) + 360) % 360}`);
+};
+$("src").onchange = () => act($("src").value === "sim" ? `src sim ${$("simDeg").value}` : `src ${$("src").value}`);
+$("simDeg").onchange = () => { if ($("src").value === "sim") act(`src sim ${$("simDeg").value}`); };
+$("saveBtn").onclick = () => act("save");
+$("rebootBtn").onclick = () => { if (confirm("Reboot the board? It will re-enumerate; reconnect afterwards.")) cmd("reboot").catch(() => {}); };
+document.querySelectorAll("[data-mode]").forEach((b) => b.onclick = () => {
+  if (!S.info || b.dataset.mode === S.info.mode) return;
+  if (!confirm(`Switch USB audio to ${b.dataset.mode === "raw8" ? "8-channel raw" : "stereo"}? The board saves this and re-enumerates; press Connect again afterwards.`)) return;
+  cmd(`mode ${b.dataset.mode}`).catch(() => {});
+  banner("Board is re-enumerating with the new audio mode. Press Connect and pick it again.");
+});
+$("cmdBtn").onclick = () => { const v = $("cmdIn").value.trim(); if (v) { cmd(v).then(refreshInfo).catch((e) => log(String(e), "err")); $("cmdIn").value = ""; } };
+$("cmdIn").onkeydown = (e) => { if (e.key === "Enter") $("cmdBtn").click(); };
+
+// compass click -> steer
+function svgAngle(ev) {
+  const r = $("compass").getBoundingClientRect();
+  const x = (ev.clientX - r.left) / r.width * 400 - 200, y = (ev.clientY - r.top) / r.height * 400 - 200;
+  return { a: ((Math.atan2(x, -y) * 180 / Math.PI) + 360) % 360, d: Math.hypot(x, y) };
+}
+$("compass").addEventListener("click", (ev) => { const { a, d } = svgAngle(ev); if (d > 40) act(`steer ${a.toFixed(0)}`); });
+$("compass").addEventListener("dblclick", (ev) => { const { d } = svgAngle(ev); if (d <= 40) act("steer auto"); });
+
+// ---------- render ----------
+function render() {
+  const off = S.info ? S.info.offset : 0, t = S.telem, now = performance.now();
+  const fresh = t && now - S.telemAt < 1000;
+  // board drawn in user frame: mic k at 60k + offset
+  for (let k = 0; k < 7; k++) {
+    const [x, y] = k < 6 ? pol(60 * k + off, 150) : [0, 26];
+    micDots[k].g.setAttribute("transform", `translate(${x.toFixed(1)},${y.toFixed(1)})`);
+    // label on the inward side so it never sits on an LED
+    const [lx, ly] = k < 6 ? pol(60 * k + off, -18) : [0, 18];
+    micDots[k].label.setAttribute("x", lx.toFixed(1));
+    micDots[k].label.setAttribute("y", (ly + 4).toFixed(1));
+  }
+  const shown = fresh ? t.az_s : null, strength = fresh ? (t.act ? Math.min(1, 0.4 + 2 * t.conf) : 0.15) : 0;
+  for (let i = 0; i < 12; i++) {
+    const a = 30 * i + off, [x, y] = pol(a, 166);
+    ledDots[i].setAttribute("cx", x.toFixed(1)); ledDots[i].setAttribute("cy", y.toFixed(1));
+    let w = 0;
+    if (shown !== null) { const dd = Math.abs(((a - shown + 540) % 360) - 180); w = strength * Math.exp(-(dd * dd) / (2 * 22 * 22)); }
+    ledDots[i].setAttribute("fill", w > 0.04 ? `rgba(255,${Math.round(120 * w * w + 60 * (1 - w))},0,${(0.25 + 0.75 * w).toFixed(2)})` : "var(--led-off)");
+  }
+  if (fresh) {
+    $("needle").setAttribute("transform", `rotate(${t.az_s})`);
+    $("needle").style.opacity = t.act ? 1 : 0.35;
+    $("rawLine").setAttribute("transform", `rotate(${t.az})`);
+    $("steerLine").setAttribute("transform", `rotate(${t.steer})`);
+    const gw = S.info && S.info.gate ? S.info.gate_width : 0;
+    if (gw > 0) {
+      const [x1, y1] = pol(t.steer - gw, 186), [x2, y2] = pol(t.steer + gw, 186);
+      $("gateWedge").setAttribute("d", `M0,0 L${x1},${y1} A186,186 0 ${gw > 90 ? 1 : 0},1 ${x2},${y2} Z`);
+    } else $("gateWedge").setAttribute("d", "");
+    $("azBig").textContent = Math.round(t.az_s);
+    $("actPill").textContent = t.act ? "sound" : "quiet";
+    $("actPill").classList.toggle("on", !!t.act);
+    $("confBar").style.width = `${Math.min(100, t.conf * 100)}%`; $("confTxt").textContent = t.conf.toFixed(2);
+    const lv = Math.max(0, Math.min(1, (t.db + 90) / 70));
+    $("lvlBar").style.width = `${lv * 100}%`; $("lvlTxt").textContent = `${t.db.toFixed(0)} dBFS (floor ${t.floor.toFixed(0)})`;
+  }
+  if (S.map) {
+    // map bins are in the board frame (5 deg each); shift into the user frame
+    const pts = S.map.map((v, g) => pol(g * 5 + off, 30 + 140 * Math.max(0, v) ** 2));
+    $("srpMap").setAttribute("points", pts.map((p) => p[0].toFixed(1) + "," + p[1].toFixed(1)).join(" "));
+  }
+  requestAnimationFrame(render);
+}
+requestAnimationFrame(render);
+
+// ---------- polling ----------
+setInterval(async () => {
+  if (!S.connected || document.hidden || S.pending.length) return;
+  try { const m = await cmd("map", true); S.map = m.map; } catch (e) {}
+}, 200);
+setInterval(async () => {
+  if (!S.connected || document.hidden) return;
+  try {
+    const s = await cmd("stats", true), i = S.info || {};
+    const up = Math.round(s.uptime_ms / 1000);
+    const rows = [["firmware", i.fw], ["audio mode", i.mode], ["CPU core 1 (audio)", (s.core1_load * 100).toFixed(0) + " %"],
+      ["CPU core 0 (DOA)", (s.doa_load * 100).toFixed(0) + " %"], ["USB packets", s.usb_packets],
+      ["USB underruns", s.usb_underruns], ["capture overruns", s.dma_overruns], ["uptime", `${Math.floor(up / 60)} min ${up % 60} s`]];
+    $("sys").innerHTML = "";
+    rows.forEach(([k, v]) => { const a = document.createElement("span"), b = document.createElement("span"); a.textContent = k; b.textContent = v ?? "–"; $("sys").append(a, b); });
+  } catch (e) {}
+}, 2000);
+</script>
+</body>
+</html>
