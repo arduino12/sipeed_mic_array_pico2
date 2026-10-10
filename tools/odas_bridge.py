@@ -15,6 +15,7 @@ import json
 import math
 import os
 import queue
+import socket
 import subprocess
 import sys
 import threading
@@ -42,7 +43,8 @@ def wsl_path(p):
 # /dev/stdin, so `cat` copies it into a FIFO that the config names as its file.
 # The explicit 0<&0 matters: a background job in non-interactive bash would
 # otherwise get /dev/null as stdin.
-ODAS_CMD = ("F=/tmp/sipeed_odas.raw; rm -f $F; mkfifo $F; cat 0<&0 > $F & "
+ODAS_CMD = ("F=/tmp/sipeed_odas.raw; P=/tmp/sipeed_odas_pots.json; rm -f $F $P; mkfifo $F $P; "
+            "cat 0<&0 > $F & cat $P >&2 & "
             "L=$HOME/odas_build/sysroot/usr/lib/x86_64-linux-gnu; "
             "LD_LIBRARY_PATH=$L:$L/pulseaudio exec stdbuf -oL $HOME/odas_build/build/bin/odaslive -c '{cfg}'")
 
@@ -62,19 +64,53 @@ class Decimator:
         return out
 
 
-def read_odas_json(stream, out_q):
-    """ODAS's terminal sink prints one multi-line JSON object per frame."""
+def read_odas_json(stream, out_q, forward=None):
+    """ODAS prints one multi-line JSON object per frame. Each parsed frame goes
+    to out_q; the raw text is also sent to `forward` (an ODAS Studio socket)."""
     buf, depth = [], 0
     for raw in iter(stream.readline, b""):
         line = raw.decode(errors="replace")
         depth += line.count("{") - line.count("}")
         buf.append(line)
         if depth == 0 and buf and "".join(buf).strip():
-            try:
-                out_q.put(json.loads("".join(buf)))
-            except ValueError:
-                pass
+            text = "".join(buf)
             buf = []
+            if forward is not None:
+                forward.send(text)
+            if out_q is not None:
+                try:
+                    out_q.put(json.loads(text))
+                except ValueError:
+                    pass
+
+
+class StudioLink:
+    """TCP client to one ODAS Studio server (9000 tracked, 9001 potential),
+    sending the frames exactly as odaslive would. Reconnects if Studio restarts."""
+
+    def __init__(self, port):
+        self.port = port
+        self.sock = None
+        self.next_try = 0.0
+        self.connected_once = False
+
+    def send(self, text):
+        if self.sock is None:
+            if time.time() < self.next_try:
+                return
+            try:
+                self.sock = socket.create_connection(("127.0.0.1", self.port), timeout=0.5)
+                if not self.connected_once:
+                    print(f"  connected to ODAS Studio on port {self.port}", flush=True)
+                self.connected_once = True
+            except OSError:
+                self.next_try = time.time() + 2.0
+                return
+        try:
+            self.sock.sendall(text.encode())
+        except OSError:
+            self.sock.close()
+            self.sock = None
 
 
 def noise_player(dev):
@@ -97,20 +133,31 @@ def noise_player(dev):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--seconds", type=float, default=20)
+    ap.add_argument("--seconds", type=float, default=20, help="run time; 0 = until Ctrl+C")
     ap.add_argument("--play", action="store_true")
     ap.add_argument("--sysvol", type=float, default=0.6, help="speaker volume while --play runs")
+    ap.add_argument("--studio", action="store_true", help="forward ODAS output to ODAS Studio (ports 9000/9001)")
     a = ap.parse_args()
 
-    con = micarray.Console()
-    if con.cmd("info")["mode"] != "raw8":
-        sys.exit("ODAS needs the 8-channel stream: send `mode raw8` first")
-    con.cmd("telem 10")
+    try:
+        con = micarray.Console()
+    except Exception as e:  # e.g. the browser GUI has the COM port open
+        print(f"(no console: {e}; firmware column disabled)")
+        con = None
+    if con:
+        if con.cmd("info")["mode"] != "raw8":
+            sys.exit("ODAS needs the 8-channel stream: send `mode raw8` first")
+        con.cmd("telem 10")
     dev, d = micarray.find_input()
+    if d is None or d["max_input_channels"] != 8:
+        sys.exit("8-channel mic array input not found: is the board in raw8 mode?")
     odas = subprocess.Popen(["wsl", "-e", "bash", "-c", ODAS_CMD.format(cfg=wsl_path(CFG_WIN))],
-                            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+                            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     results = queue.Queue()
-    threading.Thread(target=read_odas_json, args=(odas.stdout, results), daemon=True).start()
+    tracks_link = StudioLink(9000) if a.studio else None
+    pots_link = StudioLink(9001) if a.studio else None
+    threading.Thread(target=read_odas_json, args=(odas.stdout, results, tracks_link), daemon=True).start()
+    threading.Thread(target=read_odas_json, args=(odas.stderr, None, pots_link), daemon=True).start()
 
     audio_q = queue.Queue()
     dec = Decimator(8)
@@ -118,10 +165,11 @@ def main():
     if a.play:
         out_dev, _ = micarray.find_output("Realtek")
         player = noise_player(out_dev)
-    print(f"ODAS on '{d['name']}' via {d['hostapi_name']} for {a.seconds:.0f} s")
+    print(f"ODAS on '{d['name']}' via {d['hostapi_name']}" +
+          (f" for {a.seconds:.0f} s" if a.seconds > 0 else " (Ctrl+C to stop)"))
     print("   t   ODAS tracked sources (az deg / elev deg / activity)        firmware az (active)")
     last_print = 0
-    t_end = time.time() + a.seconds
+    t_end = time.time() + a.seconds if a.seconds > 0 else float("inf")
     latest_fw = None
     with SystemVolume(a.sysvol if a.play else None),             sd.InputStream(device=dev, callback=lambda x, f, t, s: audio_q.put(x.copy()), **stream_args(d)):
         if player:
@@ -135,7 +183,7 @@ def main():
                     continue
                 y = dec(x.astype(np.float64))
                 odas.stdin.write(np.clip(np.round(y), -32768, 32767).astype("<i2").tobytes())
-                for m in con.pump(0):
+                for m in con.pump(0) if con else []:
                     if "az" in m:
                         latest_fw = m
                 while not results.empty():
@@ -151,13 +199,16 @@ def main():
                     fw = (f"{latest_fw['az_s']:5.1f} ({'yes' if latest_fw['act'] else 'no'})"
                           if latest_fw else "-")
                     print(f"{time.time() - t0:5.1f}   {txt:58s} {fw}", flush=True)
+        except KeyboardInterrupt:
+            pass
         finally:
             if player:
                 player.stop()
                 player.close()
             odas.stdin.close()
             odas.terminate()
-            con.close()
+            if con:
+                con.close()
 
 
 if __name__ == "__main__":

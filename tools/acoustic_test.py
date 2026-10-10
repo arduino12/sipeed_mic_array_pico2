@@ -225,6 +225,12 @@ def beam_test(c, out_dev, in_dev, d, sig, marks, toward, channel):
     return ok
 
 
+class NullConsole:
+    def pump(self, seconds):
+        time.sleep(seconds)
+        return []
+
+
 class SystemVolume:
     """Temporarily set the default speaker's master volume (restored on exit)."""
 
@@ -263,6 +269,8 @@ def main():
     ap.add_argument("--offsets", action="store_true")
     ap.add_argument("--channel", default="left", choices=["left", "right", "both"])
     ap.add_argument("--beam", action="store_true", help="also run the steer toward/away beam test")
+    ap.add_argument("--no-console", action="store_true",
+                    help="audio only (e.g. while the browser GUI holds the COM port): offline DOA, no firmware check")
     a = ap.parse_args()
 
     out_dev, od = micarray.find_output(a.out)
@@ -272,6 +280,13 @@ def main():
     sig, marks = make_signal(a.vol)
     print(f"play on '{od['name']}', record '{d['name']}' via {d['hostapi_name']}")
     os.makedirs(OUT_DIR, exist_ok=True)
+    if a.no_console:
+        with SystemVolume(a.sysvol if a.sysvol >= 0 else None):
+            x, _ = play_and_record(out_dev, in_dev, d, sig, NullConsole(), a.channel)
+        np.save(os.path.join(OUT_DIR, "acoustic.npy"), x)
+        analyse(x, sig, marks, [])
+        print("(audio-only run: firmware DOA not checked)")
+        return
     with micarray.Console() as c:
         if c.cmd("info")["mode"] != "raw8":
             sys.exit("needs raw8 mode: send `mode raw8` first")

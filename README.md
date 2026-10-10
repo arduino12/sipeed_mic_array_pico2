@@ -100,21 +100,45 @@ The GUI provides:
   - It applies AGC and noise suppression.
   - In shared mode it narrows the **8-channel** endpoint to 2 channels.
 
-  For `raw8` use, open *Settings → System → Sound → Microphone (Sipeed Mic Array 8ch) → Audio enhancements: Off*. Alternatively, use an app that opens the device through WASAPI exclusive mode or WDM-KS; the tools here use WDM-KS.
+  For `raw8` use, open *Settings → System → Sound → Microphone (Sipeed Mic Array 8ch) → Audio enhancements: Off*. The stereo device has its own, separate switch. Alternatively, use an app that opens the device through WASAPI exclusive mode or WDM-KS; the tools here use WDM-KS.
 - **Linux** (e.g. a Raspberry Pi running ODAS) sees a standard 8-channel ALSA card in `raw8` mode.
+
+## Which audio mode?
+
+| | `stereo` (default) | `raw8` |
+|---|---|---|
+| Windows name | Microphone (Sipeed Mic Array) | Microphone (Sipeed Mic Array 8ch) |
+| ch 1 | the **beam**: steered and gated audio | mic 0 |
+| ch 2 | centre mic, unprocessed | mic 1 |
+| ch 3–8 | – | mics 2–5, centre, beam |
+| Format | 48 kHz / 24-bit | 48 kHz / 16-bit |
+| For | Zoom, Teams, Sound Recorder, any app that wants "a microphone" | ODAS, Audacity multitrack, Python: anything that does its own array processing |
+
+Windows treats the two modes as two different microphones. Settings such as "Audio enhancements: Off" must be set on each one separately.
 
 ## ODAS
 
-ODAS (the open-source sound localisation and tracking library) is built inside WSL by `odas/build_odas_wsl.sh`. That script needs no root: it downloads the `.deb` packages and unpacks them into a private sysroot.
+ODAS (the open-source sound localisation and tracking library) is built inside WSL by `odas/build_odas_wsl.sh`. That script needs no root: it downloads the `.deb` packages and unpacks them into a private sysroot. It also patches ODAS's JSON output, which on current glibc prints only `}` per frame (`odas/patch_odas_sprintf.py`).
+
+**ODAS Studio** is the ODAS GUI: a 3-D sphere plus azimuth/elevation plots of the tracked sources. Install it next to the project, then run it with the board in `raw8`:
 
 ```
 wsl -e bash /mnt/c/<path>/sipeed_mic_array_pico2/odas/build_odas_wsl.sh
-python tools\odas_bridge.py --seconds 20 --play
+powershell -ExecutionPolicy Bypass -File odas\install_odas_studio.ps1
+powershell -ExecutionPolicy Bypass -File odasun_odas_studio.ps1          # Ctrl+C to stop
+powershell -ExecutionPolicy Bypass -File odasun_odas_studio.ps1 -Play    # with test noise on the left speaker
 ```
 
-- The bridge pipes the 8-channel stream (decimated to 16 kHz) into `odaslive` with `odas/sipeed_6p1.cfg`, which holds the real mic geometry in the firmware's frame.
-- It prints ODAS-tracked sources next to the firmware's own DOA.
-- On Linux, switch the config's `raw.interface` to `soundcard`.
+How it is wired:
+- `tools/odas_bridge.py` captures the 8 channels (WDM-KS) and decimates them to 16 kHz.
+- It feeds `odaslive` in WSL (`odas/sipeed_6p1.cfg`, the real mic geometry in the firmware's frame) through a FIFO.
+- It forwards ODAS's tracked and potential sources to ODAS Studio on ports 9000/9001, the same TCP protocol `odaslive` uses itself.
+- It also prints the tracks, and the firmware's own DOA when the COM port is free. Close the browser GUI for that.
+
+The install script works around three problems:
+- Studio pins Electron 5 and native `grpc`. The install skips native builds, so Google speech-to-text is unavailable, and it unzips Electron by hand.
+- Shells launched from VS Code carry `ELECTRON_RUN_AS_NODE=1`, which `run_odas_studio.ps1` clears.
+- On Linux, point the config's `raw.interface` at the ALSA card (`soundcard`) instead.
 
 ## Tests (`tools/`)
 
@@ -124,7 +148,8 @@ python tools\odas_bridge.py --seconds 20 --play
 | `record_check.py stress [n]` | Opens and closes the stream n times; the console must answer every time. This is the freeze that broke the old firmware. |
 | `record_check.py long [s]` | One continuous stream, checked in 10 s chunks, plus underrun and overrun counters. |
 | `acoustic_test.py [--beam]` | Plays a sweep and noise on one laptop speaker (raising the volume only during playback). It checks per-mic SNR, balance and correlation, compares the firmware DOA with an offline GCC-PHAT estimate, and measures beam gain toward and away from the source. |
-| `odas_bridge.py` | ODAS live from the USB stream. |
+| `acoustic_test.py --no-console` | The same test, audio only, for when another program holds the COM port. |
+| `odas_bridge.py [--studio] [--play]` | ODAS live from the USB stream, optionally feeding ODAS Studio. |
 
 ## Design notes
 
