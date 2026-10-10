@@ -26,7 +26,11 @@ done
 for d in *.deb; do dpkg -x "$d" "$S"; done
 
 cd "$ROOT"
-[ -d odas ] || git clone --depth 1 https://github.com/introlab/odas.git
+if [ ! -d odas ]; then
+    git clone --depth 1 https://github.com/introlab/odas.git
+    # JSON sinks use sprintf(buf, "%s...", buf): overlapping, prints only "}" on current glibc
+    python3 "$(dirname "$(readlink -f "$0")")/patch_odas_sprintf.py" odas
+fi
 export PKG_CONFIG_PATH="$L/pkgconfig"
 export PKG_CONFIG_SYSROOT_DIR="$S"
 LF="-L$L -Wl,-rpath-link,$L -Wl,-rpath-link,$L/pulseaudio -Wl,-rpath,$L -Wl,-rpath,$L/pulseaudio"

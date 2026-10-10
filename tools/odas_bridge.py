@@ -26,6 +26,7 @@ from scipy.signal import firwin, lfilter
 
 sys.path.insert(0, os.path.dirname(__file__))
 import micarray  # noqa: E402
+from acoustic_test import SystemVolume  # noqa: E402
 from record_check import FS, stream_args  # noqa: E402
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -37,7 +38,12 @@ def wsl_path(p):
     return f"/mnt/{drive[0].lower()}" + rest.replace("\\", "/")
 
 
-ODAS_CMD = ("L=$HOME/odas_build/sysroot/usr/lib/x86_64-linux-gnu; "
+# stdin arrives through WSL interop as a socket, which ODAS cannot fopen() as
+# /dev/stdin, so `cat` copies it into a FIFO that the config names as its file.
+# The explicit 0<&0 matters: a background job in non-interactive bash would
+# otherwise get /dev/null as stdin.
+ODAS_CMD = ("F=/tmp/sipeed_odas.raw; rm -f $F; mkfifo $F; cat 0<&0 > $F & "
+            "L=$HOME/odas_build/sysroot/usr/lib/x86_64-linux-gnu; "
             "LD_LIBRARY_PATH=$L:$L/pulseaudio exec stdbuf -oL $HOME/odas_build/build/bin/odaslive -c '{cfg}'")
 
 
@@ -93,6 +99,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--seconds", type=float, default=20)
     ap.add_argument("--play", action="store_true")
+    ap.add_argument("--sysvol", type=float, default=0.6, help="speaker volume while --play runs")
     a = ap.parse_args()
 
     con = micarray.Console()
@@ -116,7 +123,7 @@ def main():
     last_print = 0
     t_end = time.time() + a.seconds
     latest_fw = None
-    with sd.InputStream(device=dev, callback=lambda x, f, t, s: audio_q.put(x.copy()), **stream_args(d)):
+    with SystemVolume(a.sysvol if a.play else None),             sd.InputStream(device=dev, callback=lambda x, f, t, s: audio_q.put(x.copy()), **stream_args(d)):
         if player:
             player.start()
         t0 = time.time()

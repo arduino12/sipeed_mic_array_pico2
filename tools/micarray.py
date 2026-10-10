@@ -36,7 +36,7 @@ class Console:
         if not port:
             raise RuntimeError("mic array COM port not found")
         self.port = port
-        self.ser = serial.Serial(port, 115200, timeout=0.05)
+        self.ser = serial.Serial(port, 115200, timeout=0.02)
         self.ser.dtr = True
         self.telemetry = []
         self._buf = b""
@@ -72,10 +72,12 @@ class Console:
         """Collect telemetry for `seconds`, return the lines received."""
         out = []
         end = time.time() + seconds
-        while time.time() < end:
+        while True:  # at least one read, so pump(0) drains what is waiting
             for msg in self._lines():
                 if "ok" not in msg and "err" not in msg:
                     out.append(msg)
+            if time.time() >= end:
+                break
         self.telemetry.extend(out)
         return out
 
