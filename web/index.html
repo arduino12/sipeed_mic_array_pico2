@@ -237,7 +237,7 @@ async function readLoop() {
       while ((i = buf.indexOf("\n")) >= 0) { handleLine(buf.slice(0, i).trim()); buf = buf.slice(i + 1); }
     }
   } catch (e) { /* device gone */ }
-  disconnected();
+  await closePort();  // unplugged or reader cancelled: either way release the port
 }
 async function connect() {
   if (!("serial" in navigator)) { banner("This browser has no Web Serial. Use Chrome or Edge on desktop."); return; }
@@ -255,19 +255,32 @@ async function connect() {
     await cmd("telem 20", true);
   } catch (e) { log(String(e), "err"); }
 }
-function disconnected() {
-  S.connected = false; S.writer = null;
-  S.pending.forEach((p) => { clearTimeout(p.timer); p.reject(new Error("disconnected")); });
-  S.pending = [];
-  $("conn").textContent = "disconnected"; $("conn").classList.remove("on");
-  $("connectBtn").textContent = "Connect";
+// Release order matters: port.close() refuses while either stream is still
+// locked, and then the browser keeps the COM port open for good. So drop the
+// writer lock first, cancel the reader (which ends the pipe and unlocks the
+// readable), wait for the pipe, and only then close.
+async function closePort() {
+  if (S.closing) return S.closing;
+  S.closing = (async () => {
+    const { port, writer, reader } = S;
+    S.connected = false; S.writer = null; S.reader = null;
+    S.pending.forEach((p) => { clearTimeout(p.timer); p.reject(new Error("disconnected")); });
+    S.pending = [];
+    try { writer && writer.releaseLock(); } catch (e) {}
+    try { reader && await reader.cancel(); } catch (e) {}
+    try { await S.closed; } catch (e) {}
+    try { port && await port.close(); S.portClosed = true; }
+    catch (e) { S.portClosed = false; log("could not release the port: " + e + " (reload the page)", "err"); }
+    S.port = null; S.telem = null; S.map = null;
+    $("conn").textContent = "disconnected"; $("conn").classList.remove("on");
+    $("connectBtn").textContent = "Connect";
+    $("azBig").textContent = "—"; $("actPill").textContent = "–"; $("actPill").classList.remove("on");
+    $("srpMap").setAttribute("points", "");
+  })();
+  await S.closing;
+  S.closing = null;
 }
-async function disconnect() {
-  try { S.reader && await S.reader.cancel(); } catch (e) {}
-  try { S.writer && S.writer.releaseLock(); } catch (e) {}
-  try { await S.closed; await S.port.close(); } catch (e) {}
-  disconnected();
-}
+const disconnect = closePort;
 $("connectBtn").onclick = () => (S.connected ? disconnect() : connect());
 function banner(msg) { const b = $("banner"); b.style.display = msg ? "block" : "none"; b.textContent = msg || ""; }
 
