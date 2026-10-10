@@ -125,8 +125,8 @@ ODAS (the open-source sound localisation and tracking library) is built inside W
 ```
 wsl -e bash /mnt/c/<path>/sipeed_mic_array_pico2/odas/build_odas_wsl.sh
 powershell -ExecutionPolicy Bypass -File odas\install_odas_studio.ps1
-powershell -ExecutionPolicy Bypass -File odasun_odas_studio.ps1          # Ctrl+C to stop
-powershell -ExecutionPolicy Bypass -File odasun_odas_studio.ps1 -Play    # with test noise on the left speaker
+powershell -ExecutionPolicy Bypass -File odas\run_odas_studio.ps1          # Ctrl+C to stop
+powershell -ExecutionPolicy Bypass -File odas\run_odas_studio.ps1 -Play    # with test noise on the left speaker
 ```
 
 How it is wired:
