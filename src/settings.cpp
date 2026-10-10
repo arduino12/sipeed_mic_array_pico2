@@ -7,7 +7,7 @@
 namespace settings {
 
 static constexpr uint32_t MAGIC = 0x4D494341;  // "MICA"
-static constexpr uint16_t VERSION = 2;
+static constexpr uint16_t VERSION = 3;
 static Settings s;
 
 void defaults() {
@@ -28,6 +28,9 @@ void defaults() {
     s.gain_db = 18;  // speech at 1 m lands near -40 dBFS; clips above ~108 dB SPL
     s.telem_hz = 10;
     s.telem_fmt = TELEM_JSON;
+    s.mute_db = -200;     // silence outside the sector
+    s.width = 0;          // same audio on both USB channels
+    s.lookahead_ms = 64;  // DOA decides ~30-50 ms after an onset
 }
 
 void load() {

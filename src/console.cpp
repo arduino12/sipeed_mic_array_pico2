@@ -55,15 +55,19 @@ static bool parse_f(const char *s, float &v) {
 
 static void cmd_info() {
     const auto &st = settings::get();
+    const bool sector = !st.steer_auto && st.gate;
     snprintf(s_out, sizeof(s_out),
              "{\"ok\":\"info\",\"fw\":\"%s\",\"mode\":\"%s\",\"src\":\"%s\",\"sys_hz\":%lu,\"pio_div\":%.4f,"
              "\"usb_mounted\":%d,\"streaming\":%d,\"steer\":\"%s\",\"steer_az\":%.1f,\"gate\":%d,"
-             "\"gate_width\":%.1f,\"gain_db\":%.1f,\"led\":\"%s\",\"bright\":%u,\"offset\":%.1f,"
+             "\"gate_width\":%.1f,\"sector\":%d,\"sector_from\":%.1f,\"sector_to\":%.1f,\"mute_db\":%.0f,"
+             "\"width\":%.0f,\"lookahead_ms\":%u,\"gain_db\":%.1f,\"led\":\"%s\",\"bright\":%u,\"offset\":%.1f,"
              "\"telem_hz\":%u,\"telem_fmt\":\"%s\",\"i2s_bit_offset\":%d}",
              FW_VERSION, mode_name(g_ctl.mode), src_name(g_ctl.source), (unsigned long)clock_get_hz(clk_sys),
              i2s::clkdiv(), usb_audio::mounted(), usb_audio::streaming(), st.steer_auto ? "auto" : "fixed",
-             st.steer_az, st.gate, st.gate_width, st.gain_db, led_name(st.led_mode), st.led_bright, st.az_offset,
-             st.telem_hz, st.telem_fmt == settings::TELEM_ODAS ? "odas" : "json", g_ctl.i2s_bit_offset);
+             st.steer_az, st.gate, st.gate_width, sector, geom::wrap360(st.steer_az - st.gate_width),
+             geom::wrap360(st.steer_az + st.gate_width), st.mute_db, st.width, st.lookahead_ms, st.gain_db,
+             led_name(st.led_mode), st.led_bright, st.az_offset, st.telem_hz,
+             st.telem_fmt == settings::TELEM_ODAS ? "odas" : "json", g_ctl.i2s_bit_offset);
     reply(s_out);
 }
 
@@ -163,6 +167,36 @@ static void dispatch(char *line) {
             st.gate_width = v;
         } else return err("gate off|on|<halfwidth_deg>");
         ok("gate");
+    } else if (!strcmp(c, "sector") && argc >= 2) {
+        // sector <from> <to>: pass only sound arriving between the two angles
+        // (clockwise from <from>), silence otherwise. sector off: follow mode.
+        float to;
+        if (!strcmp(argv[1], "off")) {
+            st.gate = 0;
+            st.steer_auto = 1;
+        } else if (argc == 3 && parse_f(argv[1], v) && parse_f(argv[2], to)) {
+            float span = geom::wrap360(to - v);
+            if (span < 5.0f) return err("sector must span at least 5 deg (clockwise from <from> to <to>)");
+            st.steer_auto = 0;
+            st.steer_az = geom::wrap360(v + 0.5f * span);
+            st.gate = 1;
+            st.gate_width = 0.5f * span;
+        } else {
+            return err("sector <from_deg> <to_deg> | sector off");
+        }
+        ok("sector");
+    } else if (!strcmp(c, "mute") && argc == 2) {
+        // level outside the sector: "full" = digital silence, or N dB below
+        if (!strcmp(argv[1], "full")) st.mute_db = -200;
+        else if (parse_f(argv[1], v) && fabsf(v) <= 80) st.mute_db = -fabsf(v);
+        else return err("mute full|<dB 0..80>");
+        ok("mute");
+    } else if (!strcmp(c, "width") && argc == 2 && parse_f(argv[1], v) && v >= 0 && v <= 180) {
+        st.width = v;
+        ok("width");
+    } else if (!strcmp(c, "lookahead") && argc == 2 && parse_f(argv[1], v) && v >= 0 && v <= 99) {
+        st.lookahead_ms = (uint8_t)v;
+        ok("lookahead");
     } else if (!strcmp(c, "gain") && argc == 2 && parse_f(argv[1], v) && v >= -20 && v <= 48) {
         st.gain_db = v;
         g_ctl.gain_db = v;
@@ -228,7 +262,8 @@ static void dispatch(char *line) {
         delay(100);
         reset_usb_boot(0, 0);
     } else if (!strcmp(c, "help")) {
-        reply("{\"ok\":\"help\",\"cmds\":\"info stats levels map | mode stereo|raw8 | steer auto|<deg> | "
+        reply("{\"ok\":\"help\",\"cmds\":\"info stats levels map | mode stereo|raw8 | sector <from> <to>|off | "
+              "mute full|<dB> | width <deg> | lookahead <ms> | steer auto|<deg> | "
               "gate off|on|<deg> | gain <dB> | offset <deg> | led doa|off|static r g b|set i r g b|bright n | "
               "telem off|json|odas|<hz> | src mics|tone|sim <deg> | tune margin|conf <v> | save defaults reboot "
               "bootsel\"}");

@@ -26,9 +26,16 @@ struct FracDelay {
     int i[NUM_MICS];
     float c[NUM_MICS][4];
 };
-static FracDelay s_beam, s_sim;
-static float s_beam_az = NAN, s_sim_az = NAN;
+static FracDelay s_beam[2], s_sim;  // beam [0] = left (or mono), [1] = right
+static float s_beam_az[2] = {NAN, NAN}, s_sim_az = NAN;
 static float s_gate_g = 1.0f;
+
+// Look-ahead: the processed output is delayed so that the gate, which core 0
+// decides from the DOA some 30-50 ms after a sound starts, is already open
+// when the onset plays.
+static constexpr int LOOKAHEAD_MAX = 4800;  // 100 ms
+static float s_la[2][LOOKAHEAD_MAX];
+static int s_la_pos;
 
 // tone source: one rotating phasor per mic (no sinf per sample)
 static float s_tone_c[NUM_MICS], s_tone_s[NUM_MICS], s_tone_rc[NUM_MICS], s_tone_rs[NUM_MICS];
@@ -149,18 +156,44 @@ static void __not_in_flash_func(process_block)() {
                                    ((int32_t)xorshift() >> 8) * (0.002f / 8388608.0f);
     }
 
-    // --- beamformer -------------------------------------------------------
-    if (g_ctl.steer_az != s_beam_az) {
-        s_beam_az = g_ctl.steer_az;
-        make_delays(s_beam, s_beam_az, +1.0f);
+    // --- beamformer(s), look-ahead, gate --------------------------------------
+    // One beam at the steering direction; with a stereo width, two beams
+    // left/right of it (facing az, "left" is the counter-clockwise side).
+    const float width = g_ctl.stereo_width;
+    const bool two = width > 0.5f;
+    const float az_l = two ? g_ctl.steer_az - 0.5f * width : g_ctl.steer_az;
+    const float az_r = g_ctl.steer_az + 0.5f * width;
+    if (az_l != s_beam_az[0]) {
+        s_beam_az[0] = az_l;
+        make_delays(s_beam[0], az_l, +1.0f);
     }
-    float beam[BLOCK];
-    const float gate_target = (g_ctl.gate_enabled && !g_ctl.gate_open) ? 0.03f : 1.0f;
+    if (two && az_r != s_beam_az[1]) {
+        s_beam_az[1] = az_r;
+        make_delays(s_beam[1], az_r, +1.0f);
+    }
+    float out_l[BLOCK], out_r[BLOCK];
+    const float gate_target = (g_ctl.gate_enabled && !g_ctl.gate_open) ? g_ctl.mute_gain : 1.0f;
+    int la = g_ctl.lookahead;
+    la = la < 0 ? 0 : (la >= LOOKAHEAD_MAX ? LOOKAHEAD_MAX - 1 : la);
     for (int n = 0; n < BLOCK; ++n) {
-        float acc = 0;
-        for (int k = 0; k < NUM_MICS; ++k) acc += delayed(s_x[k], n, s_beam.i[k], s_beam.c[k]);
+        float l = 0, r;
+        for (int k = 0; k < NUM_MICS; ++k) l += delayed(s_x[k], n, s_beam[0].i[k], s_beam[0].c[k]);
+        if (two) {
+            r = 0;
+            for (int k = 0; k < NUM_MICS; ++k) r += delayed(s_x[k], n, s_beam[1].i[k], s_beam[1].c[k]);
+        } else {
+            r = l;
+        }
+        s_la[0][s_la_pos] = l * (1.0f / NUM_MICS);
+        s_la[1][s_la_pos] = r * (1.0f / NUM_MICS);
+        int rp = s_la_pos - la;
+        if (rp < 0) rp += LOOKAHEAD_MAX;
+        if (++s_la_pos == LOOKAHEAD_MAX) s_la_pos = 0;
+        // ~10 ms fade either way; snap to exact zero so "silence" is digital silence
         s_gate_g += (gate_target - s_gate_g) * 0.002f;
-        beam[n] = acc * (1.0f / NUM_MICS) * s_gate_g;
+        if (gate_target == 0.0f && s_gate_g < 1e-6f) s_gate_g = 0.0f;
+        out_l[n] = s_la[0][rp] * s_gate_g;
+        out_r[n] = s_la[1][rp] * s_gate_g;
     }
 
     // --- USB output -------------------------------------------------------
@@ -173,14 +206,16 @@ static void __not_in_flash_func(process_block)() {
                     float v = s_x[k][HIST + n] * g * 32768.0f;
                     out[n * 8 + k] = (int16_t)(v > 32767.f ? 32767.f : (v < -32768.f ? -32768.f : v));
                 }
-                float v = beam[n] * g * 32768.0f;
+                float v = out_l[n] * g * 32768.0f;  // processed (beam + gate), look-ahead delayed
                 out[n * 8 + 7] = (int16_t)(v > 32767.f ? 32767.f : (v < -32768.f ? -32768.f : v));
             }
             if (!g_usb_ring.write(out, sizeof(out))) g_stats.usb_ring_full++;
         } else {
+            // Both channels carry the processed audio, so any app gets the
+            // filtered sound whichever channel(s) it uses.
             int32_t out[BLOCK * 2];
             for (int n = 0; n < BLOCK; ++n) {
-                float a = beam[n] * g, b = s_x[6][HIST + n] * g;
+                float a = out_l[n] * g, b = out_r[n] * g;
                 a = a > 0.99999f ? 0.99999f : (a < -1.0f ? -1.0f : a);
                 b = b > 0.99999f ? 0.99999f : (b < -1.0f ? -1.0f : b);
                 out[n * 2] = (int32_t)(a * 2147483648.0f) & (int32_t)0xFFFFFF00;

@@ -152,14 +152,20 @@ bool poll() {
     g_doa_ring.read(s_hop, sizeof(s_hop));
     const uint32_t t0 = time_us_32();
 
-    float sumsq = 0;
     for (int k = 0; k < NUM_MICS; ++k) {
         memmove(&s_frame[k][0], &s_frame[k][HOP], (N - HOP) * sizeof(float));
         for (int n = 0; n < HOP; ++n) s_frame[k][N - HOP + n] = s_hop[n][k];
     }
-    for (int n = 0; n < HOP; ++n) sumsq += s_hop[n][6] * s_hop[n][6];
 
     spectra();
+    // Activity is judged in the same band the direction comes from: a sound
+    // outside 300-4000 Hz (e.g. a sibilant) would otherwise count as "active"
+    // while its direction estimate is noise.
+    float band = 0;
+    for (int b = 0; b < NB; ++b) band += s_Xr[6][b] * s_Xr[6][b] + s_Xi[6][b] * s_Xi[6][b];
+    // Parseval with a Hann window (sum w^2 = 3N/8), one-sided spectrum:
+    // mean square of the band-limited centre-mic signal over the frame.
+    const float band_ms = band * 16.0f / (3.0f * N * N);
     gcc();
     srp();
 
@@ -175,7 +181,7 @@ bool poll() {
     Result &r = s_res;
     r.az = geom::wrap360((best + off) * 360.0f / GRID);
     r.conf = y0 / (float)(NPAIRS * NB);
-    r.db = 10.0f * log10f(sumsq / HOP + 1e-20f);
+    r.db = 10.0f * log10f(band_ms + 1e-20f);
     if (!s_floor_init) {
         r.floor_db = r.db;
         s_floor_init = true;

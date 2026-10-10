@@ -53,7 +53,8 @@ def make_signal(vol):
 
 def play_and_record(out_dev, in_dev, d, sig, console, channel="left"):
     n_rec = len(sig) + int(0.6 * FS)
-    rec = np.zeros((n_rec, d["max_input_channels"]), np.int16)
+    args = stream_args(d)
+    rec = np.zeros((n_rec, d["max_input_channels"]), args["dtype"])  # int16 (raw8) or int32 (stereo)
     pos = {"in": 0, "out": 0}
     done = threading.Event()
 
@@ -65,10 +66,14 @@ def play_and_record(out_dev, in_dev, d, sig, console, channel="left"):
         if pos["in"] >= n_rec:
             done.set()
 
+    go = threading.Event()
+
     def out_cb(outdata, frames, t, status):
+        outdata[:] = 0
+        if not go.is_set():
+            return
         i = pos["out"]
         chunk = sig[i:i + frames]
-        outdata[:] = 0
         # One speaker only: the laptop's two speakers ~30 cm apart are two
         # sources, and which one dominates depends on frequency.
         if channel in ("left", "both"):
@@ -78,9 +83,14 @@ def play_and_record(out_dev, in_dev, d, sig, console, channel="left"):
         pos["out"] += frames
 
     telem = []
-    with sd.InputStream(device=in_dev, callback=in_cb, **stream_args(d)):
-        t0 = time.time()  # host time of recording sample 0 (to within a block)
-        with sd.OutputStream(device=out_dev, samplerate=FS, channels=2, dtype="float32", callback=out_cb):
+    # The speaker stream opens first and plays silence for a while: opening it
+    # can pop, and that pop (plus the gate's hangover) must be over before the
+    # recording -- whose first 0.5 s is meant to be quiet -- starts.
+    with sd.OutputStream(device=out_dev, samplerate=FS, channels=2, dtype="float32", callback=out_cb):
+        console.pump(1.2)
+        with sd.InputStream(device=in_dev, callback=in_cb, **args):
+            t0 = time.time()  # host time of recording sample 0 (to within a block)
+            go.set()
             while not done.is_set():
                 telem += console.pump(0.1)
     for m in telem:
@@ -225,6 +235,66 @@ def beam_test(c, out_dev, in_dev, d, sig, marks, toward, channel):
     return ok
 
 
+def sweep_latency(y, sig, marks):
+    """Speaker -> channel latency in samples, from the sweep."""
+    s0, s1 = marks["sweep"]
+    cc = np.correlate(y[: s1 + FS], sig[s0:s1], mode="valid")
+    return int(np.argmax(np.abs(cc))) - s0
+
+
+def sector_test(c, out_dev, in_dev, d, sig, marks, src_az, channel):
+    """Pass-only-a-sector. Sector on the speaker: the noise must pass, onset
+    included (look-ahead). Sector on the far side: digital silence. Either
+    way: digital silence while nothing plays."""
+    raw8 = d["max_input_channels"] == 8
+    out_ch = 7 if raw8 else 0
+    info = c.cmd("info")
+    la = int(info["lookahead_ms"] * FS / 1000)
+    n0, n1 = marks["noise"]
+    s0 = marks["sweep"][0]
+    ok, lat_out = True, None
+    print(f"  sector test on USB ch{out_ch + 1} (look-ahead {info['lookahead_ms']} ms)")
+    for name, center in (("on the speaker", src_az), ("opposite side", (src_az + 180) % 360)):
+        lo, hi = (center - 25) % 360, (center + 25) % 360
+        c.cmd(f"sector {lo:.0f} {hi:.0f}")
+        c.pump(0.6)
+        x, _ = play_and_record(out_dev, in_dev, d, sig, c, channel)
+        np.save(os.path.join(OUT_DIR, f"sector_{'on' if name.startswith('on') else 'off'}.npy"), x)
+        y = x[:, out_ch]
+        if raw8:
+            lat_out = sweep_latency(x[:, 6], sig, marks) + la
+        elif lat_out is None:
+            lat_out = sweep_latency(y, sig, marks)
+        seg = y[n0 + lat_out + 4800: n1 + lat_out - 4800]
+        lead = y[int(0.05 * FS): s0 + lat_out - 2400]
+        lvl = 20 * np.log10(np.sqrt(np.mean(seg ** 2)) + 1e-12)
+        lead_zero = np.count_nonzero(lead) == 0
+        line = f"    sector {lo:3.0f}..{hi:3.0f} ({name:14s}): noise {lvl:7.1f} dBFS, "                f"silent before playback: {'yes' if lead_zero else 'NO'}"
+        if name == "on the speaker":
+            env = np.sqrt(np.convolve(y ** 2, np.ones(240) / 240, mode="same"))
+            steady = np.sqrt(np.mean(seg ** 2))
+            t0 = n0 + lat_out
+            win = env[t0 - 960: t0 + 9600]
+            reach = int(np.argmax(win >= 0.5 * steady)) - 960
+            onset_ms = reach / FS * 1000
+            line += f", onset reaches -6 dB after {onset_ms:+.0f} ms"
+            good = lvl > -60 and lead_zero and onset_ms < 20
+            if raw8:
+                ref = 20 * np.log10(np.sqrt(np.mean(x[n0 + lat_out - la + 4800: n1 + lat_out - la - 4800, 6] ** 2)))
+                line += f" (centre mic {ref:.1f} dBFS)"
+        else:
+            zero_frac = 1 - np.count_nonzero(seg) / len(seg)
+            line += f", digital zeros during noise: {zero_frac * 100:.1f}%"
+            good = zero_frac > 0.99 and lead_zero
+        print(line + ("  OK" if good else "  FAIL"))
+        ok &= good
+    # restore the user's steering/gate
+    c.cmd("steer auto" if info["steer"] == "auto" else f"steer {info['steer_az']}")
+    c.cmd(f"gate {info['gate_width']}" if info["gate"] else "gate off")
+    print("  SECTOR", "OK" if ok else "FAIL")
+    return ok
+
+
 class NullConsole:
     def pump(self, seconds):
         time.sleep(seconds)
@@ -269,6 +339,8 @@ def main():
     ap.add_argument("--offsets", action="store_true")
     ap.add_argument("--channel", default="left", choices=["left", "right", "both"])
     ap.add_argument("--beam", action="store_true", help="also run the steer toward/away beam test")
+    ap.add_argument("--sector", action="store_true", help="also run the pass-only-a-sector test")
+    ap.add_argument("--az", type=float, help="source direction for --sector in stereo mode")
     ap.add_argument("--no-console", action="store_true",
                     help="audio only (e.g. while the browser GUI holds the COM port): offline DOA, no firmware check")
     a = ap.parse_args()
@@ -289,7 +361,15 @@ def main():
         return
     with micarray.Console() as c:
         if c.cmd("info")["mode"] != "raw8":
-            sys.exit("needs raw8 mode: send `mode raw8` first")
+            # stereo: only the processed output is visible, so only the sector
+            # test can run, around a source direction given on the command line
+            if not (a.sector and a.az is not None):
+                sys.exit("needs raw8 mode (`mode raw8`), or stereo with --sector --az <source deg>")
+            c.cmd("src mics")
+            with SystemVolume(a.sysvol if a.sysvol >= 0 else None):
+                ok = sector_test(c, out_dev, in_dev, d, sig, marks, a.az, a.channel)
+            print("ACOUSTIC TEST", "PASS" if ok else "FAIL")
+            sys.exit(0 if ok else 1)
         c.cmd("src mics")
         c.cmd("telem 20")
         c.cmd("telem json")
@@ -308,6 +388,9 @@ def main():
         if a.beam:
             with SystemVolume(a.sysvol if a.sysvol >= 0 else None):
                 ok &= beam_test(c, out_dev, in_dev, d, sig, marks, fw if fw is not None else az, a.channel)
+        if a.sector:
+            with SystemVolume(a.sysvol if a.sysvol >= 0 else None):
+                ok &= sector_test(c, out_dev, in_dev, d, sig, marks, fw if fw is not None else az, a.channel)
         c.cmd("telem 10")
     print("ACOUSTIC TEST", "PASS" if ok else "FAIL")
     sys.exit(0 if ok else 1)

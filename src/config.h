@@ -1,7 +1,7 @@
-#pragma once
+﻿#pragma once
 #include <stdint.h>
 
-#define FW_VERSION "0.1.0"
+#define FW_VERSION "0.2.0"
 
 // ---------------------------------------------------------------------------
 // Pins (Raspberry Pi Pico 2)

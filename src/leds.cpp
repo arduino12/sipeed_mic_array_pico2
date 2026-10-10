@@ -44,7 +44,7 @@ void show(uint8_t bright5) {
     spi_write_blocking(spi0, buf, sizeof(buf));
 }
 
-void render_doa(float az, float strength, float steer_az, bool show_steer, uint32_t now_ms) {
+void render_doa(float az, float strength, float steer_az, bool show_steer, const Sector &sec, uint32_t now_ms) {
     if (strength > 1) strength = 1;
     // idle: faint slow breathing so it is obvious the board is alive
     float idle = 6.0f + 4.0f * sinf(now_ms * 0.002f);
@@ -52,7 +52,12 @@ void render_doa(float az, float strength, float steer_az, bool show_steer, uint3
         float d = fabsf(geom::angdiff(i * 30.0f, az));
         float blob = strength * expf(-(d * d) / (2.0f * 22.0f * 22.0f));
         float r = 255.0f * blob, g = 120.0f * blob * blob, b = idle * (1.0f - blob);
-        if (show_steer && fabsf(geom::angdiff(i * 30.0f, steer_az)) < 15.0f) {
+        // an LED counts as in the sector if any part of its 30 deg slice is
+        const float ds = fabsf(geom::angdiff(i * 30.0f, sec.center));
+        if (sec.on && ds <= sec.halfwidth + 15.0f) {
+            if (sec.open) g += 90.0f;
+            else b += 60.0f;
+        } else if (!sec.on && show_steer && fabsf(geom::angdiff(i * 30.0f, steer_az)) < 15.0f) {
             b += 70.0f;
             g += 20.0f;
         }

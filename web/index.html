@@ -94,8 +94,8 @@
         <g id="needle"><path d="M0,-168 L9,-140 L-9,-140 Z" fill="var(--accent)"/><line x1="0" y1="0" x2="0" y2="-142" stroke="var(--accent)" stroke-width="4" stroke-linecap="round"/></g>
         <circle r="5" fill="var(--ink)"/>
       </svg>
-      <div class="hint">Click the ring to steer the beam to that direction; double-click the centre for auto.
-        Blue = beam (and gate window), orange = sound direction, shaded = SRP map.</div>
+      <div class="hint">Orange = sound direction, shaded = how strongly sound arrives from each angle,
+        blue = beam direction and sector. Click the ring to aim the beam or move the sector; double-click the centre to go back to follow mode.</div>
     </div>
     <div class="card">
       <h2>Live</h2>
@@ -107,15 +107,20 @@
   </section>
   <section class="stack">
     <div class="card">
-      <h2>Beam</h2>
-      <div class="row"><label>steering</label>
-        <button class="seg" id="steerAuto">Auto (follow)</button><button class="seg" id="steerFixed">Fixed</button>
+      <h2>Direction filter <span class="muted" style="text-transform:none;letter-spacing:0">— what the USB microphone sends</span></h2>
+      <div class="row"><label>mode</label>
+        <button class="seg" id="fmFollow">Follow talker</button><button class="seg" id="fmSector">Only a sector</button><button class="seg" id="fmFixed">Fixed beam</button></div>
+      <div class="row" id="sectorRow"><label>sector</label>
+        from <input type="number" id="secFrom" min="0" max="359" step="1" style="width:76px"> °
+        to <input type="number" id="secTo" min="0" max="359" step="1" style="width:76px"> °
+        <span id="gatePill" class="pill">–</span></div>
+      <div class="row" id="fixedRow"><label>direction</label>
         <input type="number" id="steerDeg" min="0" max="359" step="1" style="width:80px"> °</div>
-      <div class="row"><label>gate</label>
-        <button class="seg" id="gateOff">Off</button><button class="seg" id="gateOn">On</button>
-        <input type="range" id="gateWidth" min="5" max="90" step="1"><span id="gateTxt" class="muted"></span></div>
+      <div class="row" id="muteRow"><label>outside</label>
+        <select id="mute"><option value="full">silence</option><option value="30">30 dB quieter</option><option value="20">20 dB quieter</option><option value="10">10 dB quieter</option></select></div>
+      <div class="row"><label>stereo width</label><input type="range" id="width" min="0" max="120" step="5"><span id="widthTxt" class="muted"></span></div>
       <div class="row"><label>gain</label><input type="range" id="gain" min="-20" max="48" step="1"><span id="gainTxt" class="muted"></span></div>
-      <div class="hint">Gate mutes the beam (−30 dB) unless a sound is detected inside the window around the steering direction.</div>
+      <div class="hint" id="fmHint"></div>
     </div>
     <div class="card">
       <h2>LED ring</h2>
@@ -128,7 +133,7 @@
     <div class="card">
       <h2>USB audio &amp; calibration</h2>
       <div class="row"><label>mode</label>
-        <button class="seg" data-mode="stereo">Stereo (beam + centre)</button><button class="seg" data-mode="raw8">8-ch raw</button></div>
+        <button class="seg" data-mode="stereo">Microphone (2-ch, filtered)</button><button class="seg" data-mode="raw8">8-ch raw (ODAS)</button></div>
       <div class="row"><label>front offset</label><input type="number" id="offset" min="0" max="359" step="1" style="width:80px"> °
         <button id="frontBtn">Set current sound as 0°</button></div>
       <div class="row"><label>source</label>
@@ -291,10 +296,25 @@ async function refreshInfo() {
   $("modePill").textContent = i.mode === "raw8" ? "8-ch raw" : "stereo";
   $("modePill").classList.add("on");
   sel("[data-mode]", (b) => b.dataset.mode === i.mode);
-  setSeg("steerAuto", i.steer === "auto"); setSeg("steerFixed", i.steer !== "auto");
+  const fm = i.sector ? "sector" : (i.steer === "auto" ? "follow" : "fixed");
+  S.fm = fm;
+  setSeg("fmFollow", fm === "follow"); setSeg("fmSector", fm === "sector"); setSeg("fmFixed", fm === "fixed");
+  $("sectorRow").style.display = fm === "sector" ? "" : "none";
+  $("muteRow").style.display = fm === "sector" ? "" : "none";
+  $("fixedRow").style.display = fm === "fixed" ? "" : "none";
+  if (fm === "sector" && document.activeElement !== $("secFrom") && document.activeElement !== $("secTo")) {
+    $("secFrom").value = Math.round(i.sector_from); $("secTo").value = Math.round(i.sector_to);
+  }
   if (document.activeElement !== $("steerDeg")) $("steerDeg").value = Math.round(i.steer_az);
-  setSeg("gateOn", !!i.gate); setSeg("gateOff", !i.gate);
-  $("gateWidth").value = i.gate_width; $("gateTxt").textContent = `±${Math.round(i.gate_width)}°`;
+  $("mute").value = i.mute_db <= -90 ? "full" : String(Math.round(-i.mute_db));
+  $("width").value = i.width; $("widthTxt").textContent = i.width > 0 ? `${i.width}° (two beams)` : "0 (same audio on both)";
+  $("fmHint").textContent = {
+    follow: "The beam follows whoever is talking; the microphone always sends audio.",
+    sector: "Only sound arriving from the sector is sent; otherwise the microphone sends " +
+            (i.mute_db <= -90 ? "silence." : `audio ${Math.round(-i.mute_db)} dB quieter.`) +
+            ` The output runs ${i.lookahead_ms} ms behind so a sentence's first syllable is not cut. Click the compass to move the sector.`,
+    fixed: "The beam stays pointed at one direction (sounds from there are louder); nothing is muted. Click the compass to aim it.",
+  }[fm];
   $("gain").value = i.gain_db; $("gainTxt").textContent = `${i.gain_db} dB`;
   sel("[data-led]", (b) => b.dataset.led === i.led);
   $("bright").value = i.bright; $("brightTxt").textContent = i.bright;
@@ -305,13 +325,18 @@ function setSeg(id, on) { $(id).classList.toggle("sel", on); }
 function sel(q, pred) { document.querySelectorAll(q).forEach((b) => b.classList.toggle("sel", pred(b))); }
 async function act(line) { try { await cmd(line); await refreshInfo(); } catch (e) { log(String(e), "err"); } }
 
-$("steerAuto").onclick = () => act("steer auto");
-$("steerFixed").onclick = () => act(`steer ${$("steerDeg").value || 0}`);
+const sectorCmd = () => `sector ${$("secFrom").value || 20} ${$("secTo").value || 50}`;
+$("fmFollow").onclick = () => act("sector off");
+$("fmSector").onclick = () => {
+  if (!$("secFrom").value) { $("secFrom").value = 20; $("secTo").value = 50; }
+  act(sectorCmd());
+};
+$("fmFixed").onclick = async () => { await act("gate off"); act(`steer ${$("steerDeg").value || 0}`); };
+$("secFrom").onchange = $("secTo").onchange = () => act(sectorCmd());
 $("steerDeg").onchange = () => act(`steer ${$("steerDeg").value || 0}`);
-$("gateOn").onclick = () => act("gate on");
-$("gateOff").onclick = () => act("gate off");
-$("gateWidth").oninput = () => { $("gateTxt").textContent = `±${$("gateWidth").value}°`; };
-$("gateWidth").onchange = () => act(`gate ${$("gateWidth").value}`);
+$("mute").onchange = () => act(`mute ${$("mute").value}`);
+$("width").oninput = () => { $("widthTxt").textContent = +$("width").value > 0 ? `${$("width").value}° (two beams)` : "0 (same audio on both)"; };
+$("width").onchange = () => act(`width ${$("width").value}`);
 $("gain").oninput = () => { $("gainTxt").textContent = `${$("gain").value} dB`; };
 $("gain").onchange = () => act(`gain ${$("gain").value}`);
 document.querySelectorAll("[data-led]").forEach((b) => b.onclick = () => {
@@ -333,7 +358,7 @@ $("saveBtn").onclick = () => act("save");
 $("rebootBtn").onclick = () => { if (confirm("Reboot the board? It will re-enumerate; reconnect afterwards.")) cmd("reboot").catch(() => {}); };
 document.querySelectorAll("[data-mode]").forEach((b) => b.onclick = () => {
   if (!S.info || b.dataset.mode === S.info.mode) return;
-  if (!confirm(`Switch USB audio to ${b.dataset.mode === "raw8" ? "8-channel raw" : "stereo"}? The board saves this and re-enumerates; press Connect again afterwards.`)) return;
+  if (!confirm(`Switch USB audio to ${b.dataset.mode === "raw8" ? "8-channel raw (for ODAS / multitrack recording)" : "the 2-channel filtered microphone"}? The board saves this and re-enumerates; press Connect again afterwards.`)) return;
   cmd(`mode ${b.dataset.mode}`).catch(() => {});
   banner("Board is re-enumerating with the new audio mode. Press Connect and pick it again.");
 });
@@ -346,8 +371,15 @@ function svgAngle(ev) {
   const x = (ev.clientX - r.left) / r.width * 400 - 200, y = (ev.clientY - r.top) / r.height * 400 - 200;
   return { a: ((Math.atan2(x, -y) * 180 / Math.PI) + 360) % 360, d: Math.hypot(x, y) };
 }
-$("compass").addEventListener("click", (ev) => { const { a, d } = svgAngle(ev); if (d > 40) act(`steer ${a.toFixed(0)}`); });
-$("compass").addEventListener("dblclick", (ev) => { const { d } = svgAngle(ev); if (d <= 40) act("steer auto"); });
+$("compass").addEventListener("click", (ev) => {
+  const { a, d } = svgAngle(ev);
+  if (d <= 40) return;
+  if (S.fm === "sector" && S.info) {  // move the sector, keep its width
+    const half = S.info.gate_width;
+    act(`sector ${((a - half + 360) % 360).toFixed(0)} ${((a + half) % 360).toFixed(0)}`);
+  } else act(`steer ${a.toFixed(0)}`);
+});
+$("compass").addEventListener("dblclick", (ev) => { const { d } = svgAngle(ev); if (d <= 40) act("sector off"); });
 
 // ---------- render ----------
 function render() {
@@ -380,6 +412,8 @@ function render() {
       const [x1, y1] = pol(t.steer - gw, 186), [x2, y2] = pol(t.steer + gw, 186);
       $("gateWedge").setAttribute("d", `M0,0 L${x1},${y1} A186,186 0 ${gw > 90 ? 1 : 0},1 ${x2},${y2} Z`);
     } else $("gateWedge").setAttribute("d", "");
+    $("gatePill").textContent = t.gate ? "passing audio" : "muted";
+    $("gatePill").classList.toggle("on", !!t.gate);
     $("azBig").textContent = Math.round(t.az_s);
     $("actPill").textContent = t.act ? "sound" : "quiet";
     $("actPill").classList.toggle("on", !!t.act);

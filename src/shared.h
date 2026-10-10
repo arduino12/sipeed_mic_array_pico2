@@ -16,6 +16,9 @@ struct Control {
     volatile float steer_az = 0.0f;       // core0: beam steering direction (deg)
     volatile bool gate_enabled = false;   // core0
     volatile bool gate_open = true;       // core0: DOA says the steered direction is talking
+    volatile float mute_gain = 0.0f;      // core0: output gain while the gate is closed (0 = silence)
+    volatile float stereo_width = 0.0f;   // core0: L/R beams at steer -+ width/2; 0 = same audio on both
+    volatile int lookahead = 3072;        // core0: output delay in samples so the gate opens before onsets
     volatile float gain_db = 18.0f;       // core0: digital gain applied to USB audio
     volatile bool streaming = false;      // USB ISR: host has the audio stream open
     // core0 (debug): BCK position of the MSB within a captured slot word. The

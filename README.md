@@ -3,8 +3,8 @@
 The firmware turns the Sipeed R6+1 microphone array and a Pico 2 (RP2350) into a standard USB device with two functions:
 
 - **USB microphone (UAC2), driverless.** Two audio modes, switchable over serial:
-  - `stereo` (default): 48 kHz / 24-bit. Channel 1 is the **steered beam**, channel 2 is the raw centre mic.
-  - `raw8`: 48 kHz / 16-bit. Channels 1–6 are the ring mics, channel 7 is the centre mic, channel 8 is the beam. This mode is for PC-side processing such as ODAS or your own Python code.
+  - `stereo` (default): a normal 2-channel microphone, 48 kHz / 24-bit. Both channels carry the **filtered** audio. It can follow the talker, be aimed at a fixed direction, or pass only one sector (silence otherwise). See *Direction filter*.
+  - `raw8`: 48 kHz / 16-bit. Channels 1–6 are the ring mics, channel 7 is the centre mic, channel 8 is the filtered output. This mode is for PC-side processing such as ODAS or your own Python code.
 - **USB serial (CDC).** It streams the sound direction as JSON lines and accepts commands for the LEDs, beam steering and gating, mode, and calibration.
 
 The 12-LED ring shows where the sound comes from.
@@ -61,8 +61,12 @@ Every command returns exactly one JSON line: `{"ok":"<cmd>",...}` or `{"err":"..
 |---|---|
 | `info`, `stats`, `levels`, `map` | Status, CPU/USB counters, per-mic levels, SRP map (72 × 5°). |
 | `mode stereo` / `mode raw8` | USB audio layout. Saves and re-enumerates. |
+| `sector <from> <to>` / `sector off` | Pass only sound from that sector (see *Direction filter*), or go back to follow mode. |
+| `mute full` / `mute <dB>` | Outside the sector: digital silence (default), or N dB quieter. |
+| `width <deg>` | Stereo width: 0 = same audio on both channels, >0 = left/right beams. |
+| `lookahead <ms>` | Output delay that lets the gate open before onsets (default 64). |
 | `steer auto` / `steer <deg>` | The beam follows the DOA, or stays fixed at an angle. |
-| `gate off` / `gate on` / `gate <halfwidth>` | Mute the beam (−30 dB) unless sound is detected within ±halfwidth of the steering direction. |
+| `gate off` / `gate on` / `gate <halfwidth>` | Low-level form of `sector`: mute unless sound is within ±halfwidth of the steering direction. |
 | `gain <dB>` | Digital gain on the USB audio (default 18). |
 | `led doa` / `led off` / `led static r g b` / `led set i r g b` / `led bright 1..31` | LED ring. |
 | `offset <deg>` | Rotate the angle frame. |
@@ -103,18 +107,38 @@ The GUI provides:
   For `raw8` use, open *Settings → System → Sound → Microphone (Sipeed Mic Array 8ch) → Audio enhancements: Off*. The stereo device has its own, separate switch. Alternatively, use an app that opens the device through WASAPI exclusive mode or WDM-KS; the tools here use WDM-KS.
 - **Linux** (e.g. a Raspberry Pi running ODAS) sees a standard 8-channel ALSA card in `raw8` mode.
 
+## Direction filter (what the microphone sends)
+
+The "beam" is ordinary audio: all 7 mics added with per-mic delays, so sound from the chosen direction adds up and sound from elsewhere partly cancels. Three ways to use it:
+
+| Mode | Command | Output |
+|---|---|---|
+| Follow talker (default) | `sector off` | The beam follows whoever is talking; audio always flows. |
+| Only a sector | `sector 20 50` | Audio only while the dominant sound arrives from 20°–50° (clockwise from `from` to `to`). Otherwise **digital silence**, or `mute 30` for 30 dB quieter. |
+| Fixed beam | `steer 120` (and `gate off`) | The beam stays at 120°. Nothing is muted, but sound from there is louder. |
+
+How the sector mode behaves:
+
+- **When it opens.** The gate opens when the strongest sound *inside* the sector is (nearly) the strongest overall in the 300–4000 Hz direction band, for two consecutive 16 ms estimates. It stays open 400 ms after the last such estimate, to bridge pauses between words.
+- **Look-ahead.** The output runs `lookahead` ms behind the mics (default 64) so the gate is already open when a sentence starts. The test measures onsets within a few ms. `lookahead 0` removes the extra latency at the cost of clipped first syllables.
+- **Stereo width.** `width 60` turns the two channels into two beams, 30° to the left and right of the steering direction: a real stereo image, with about 8–9 dB of separation above 1 kHz. `width 0` (default) puts the same audio on both channels.
+- **Limits.**
+  - The array is 8 cm across, so below about 1 kHz it hardly separates directions (about 1–2 dB). When someone outside the sector talks at the same time as someone inside, the outside voice is reduced but not removed.
+  - Use sectors at least about 30° wide; reflections move the estimate by a few degrees.
+
+The browser GUI has the same controls: the "Direction filter" card, plus clicking the compass to move the sector. The LED ring shows the sector in blue while muted and green while passing audio.
+
 ## Which audio mode?
 
 | | `stereo` (default) | `raw8` |
 |---|---|---|
 | Windows name | Microphone (Sipeed Mic Array) | Microphone (Sipeed Mic Array 8ch) |
-| ch 1 | the **beam**: steered and gated audio | mic 0 |
-| ch 2 | centre mic, unprocessed | mic 1 |
-| ch 3–8 | – | mics 2–5, centre, beam |
+| ch 1 / ch 2 | filtered audio (identical, or left/right beams with `width`) | mic 0 / mic 1 |
+| ch 3–8 | – | mics 2–5, centre, filtered output |
 | Format | 48 kHz / 24-bit | 48 kHz / 16-bit |
 | For | Zoom, Teams, Sound Recorder, any app that wants "a microphone" | ODAS, Audacity multitrack, Python: anything that does its own array processing |
 
-Windows treats the two modes as two different microphones. Settings such as "Audio enhancements: Off" must be set on each one separately.
+Windows treats the two modes as two different microphones. Settings such as "Audio enhancements: Off" must be set on each one separately. In `raw8`, channel 8 runs `lookahead` ms behind channels 1–7.
 
 ## ODAS
 
@@ -147,7 +171,7 @@ The install script works around three problems:
 | `record_check.py tone [s]` | Channel map (each mic channel at its own tone frequency), bit-exact continuity, no zero runs. |
 | `record_check.py stress [n]` | Opens and closes the stream n times; the console must answer every time. This is the freeze that broke the old firmware. |
 | `record_check.py long [s]` | One continuous stream, checked in 10 s chunks, plus underrun and overrun counters. |
-| `acoustic_test.py [--beam]` | Plays a sweep and noise on one laptop speaker (raising the volume only during playback). It checks per-mic SNR, balance and correlation, compares the firmware DOA with an offline GCC-PHAT estimate, and measures beam gain toward and away from the source. |
+| `acoustic_test.py [--beam] [--sector]` | Plays a sweep and noise on one laptop speaker (raising the volume only during playback). It checks per-mic SNR, balance and correlation, compares the firmware DOA with an offline GCC-PHAT estimate, measures beam gain toward and away from the source, and with `--sector` checks a sector on the speaker (passes, onset not cut) and one opposite it (digital silence). In stereo mode, run `--sector --az <deg>`. |
 | `acoustic_test.py --no-console` | The same test, audio only, for when another program holds the COM port. |
 | `odas_bridge.py [--studio] [--play]` | ODAS live from the USB stream, optionally feeding ODAS Studio. |
 

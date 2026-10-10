@@ -4,8 +4,9 @@
     python tools/record_check.py stress [cycles]  open/close the stream repeatedly; console must stay alive
     python tools/record_check.py speaker          play sweeps/noise on the laptop speakers, check capture
 
-The `tone` source makes channel k (mic k, 0..6) a 500*(k+1) Hz sine, so every
-USB channel can be identified by frequency.
+The `tone` source makes mic k (0..6) a 500*(k+1) Hz sine, so every raw USB
+channel can be identified by frequency. The processed channels (stereo ch1/ch2,
+raw8 ch8) carry the beam: a fixed mix of all seven tones.
 """
 import os
 import sys
@@ -21,11 +22,16 @@ FS = 48000
 OUT_DIR = os.path.join(os.path.dirname(__file__), "out")
 
 
+ALL_TONES = tuple(500.0 * (k + 1) for k in range(7))
+
+
 def expected_tones(mode):
-    """{usb channel index: expected Hz} for the tone source."""
+    """{usb channel index: expected Hz, or ALL_TONES for a beam channel}."""
     if mode == "raw8":
-        return {k: 500.0 * (k + 1) for k in range(7)}
-    return {1: 3500.0}  # stereo: ch1 = beam (mix), ch2 = centre mic
+        out = {k: 500.0 * (k + 1) for k in range(7)}
+        out[7] = ALL_TONES
+        return out
+    return {0: ALL_TONES, 1: ALL_TONES}
 
 
 def stream_args(dev_info):
@@ -58,13 +64,18 @@ def dominant_freq(x):
 
 
 def tone_glitches(x, f, seg=480):
-    """Least-squares sine fit per 10 ms segment; returns residual dB per segment."""
+    """Least-squares fit of sines at f (one frequency or a tuple) per 10 ms
+    segment; returns the residual in dB re the segment, per segment."""
+    freqs = f if isinstance(f, tuple) else (f,)
     t = np.arange(seg) / FS
     out = []
     for s in range(0, len(x) - seg, seg):
         y = x[s:s + seg]
-        ph = 2 * np.pi * f * (t + s / FS)
-        A = np.stack([np.cos(ph), np.sin(ph), np.ones(seg)], axis=1)
+        cols = [np.ones(seg)]
+        for fk in freqs:
+            ph = 2 * np.pi * fk * (t + s / FS)
+            cols += [np.cos(ph), np.sin(ph)]
+        A = np.stack(cols, axis=1)
         coef, *_ = np.linalg.lstsq(A, y, rcond=None)
         res = y - A @ coef
         out.append(10 * np.log10((res ** 2).mean() / ((y ** 2).mean() + 1e-20) + 1e-20))
@@ -83,8 +94,11 @@ def check_tones(x, mode, verbose=True):
     x = x[int(0.3 * FS):]  # skip stream start-up
     for ch, f_exp in expected_tones(mode).items():
         y = x[:, ch]
-        f = dominant_freq(y)
-        ppm = (f / f_exp - 1) * 1e6
+        if isinstance(f_exp, tuple):  # beam channel: fixed mix of all tones
+            f, ppm = f_exp, 0.0
+        else:
+            f = dominant_freq(y)
+            ppm = (f / f_exp - 1) * 1e6
         res = tone_glitches(y, f)
         bad = int(np.sum(res > -30))
         zr = zero_runs(y)
@@ -92,16 +106,41 @@ def check_tones(x, mode, verbose=True):
         good = abs(ppm) < 1000 and bad == 0 and zr == 0 and rms > -40
         ok &= good
         if verbose:
-            print(f"  ch{ch + 1}: {f:9.2f} Hz (exp {f_exp:.0f}, {ppm:+7.1f} ppm)  {rms:6.1f} dBFS  "
+            what = "beam (7-tone mix)" if isinstance(f, tuple) else f"{f:9.2f} Hz (exp {f_exp:.0f}, {ppm:+7.1f} ppm)"
+            print(f"  ch{ch + 1}: {what:34s}  {rms:6.1f} dBFS  "
                   f"worst residual {res.max():6.1f} dB  glitch segs {bad}  zero runs {zr}  "
                   f"{'OK' if good else 'FAIL'}")
+    if mode == "stereo":
+        same = np.allclose(x[:, 0], x[:, 1])
+        ok &= same
+        if verbose:
+            print(f"  ch1 == ch2 (stereo width 0): {'yes' if same else 'NO'}")
     return ok
 
 
+class FixedBeam:
+    """Beam fixed at 0 deg with no gate while a synthetic source plays (the
+    DOA of test tones is meaningless); restores the user's settings after."""
+
+    def __init__(self, console):
+        self.c = console
+
+    def __enter__(self):
+        self.info = self.c.cmd("info")
+        self.c.cmd("steer 0")
+        self.c.cmd("gate off")
+        return self
+
+    def __exit__(self, *exc):
+        i = self.info
+        self.c.cmd("src mics")
+        self.c.cmd("steer auto" if i["steer"] == "auto" else f"steer {i['steer_az']}")
+        self.c.cmd(f"gate {i['gate_width']}" if i["gate"] else "gate off")
+
+
 def cmd_tone(seconds):
-    with micarray.Console() as c:
-        info = c.cmd("info")
-        mode = info["mode"]
+    with micarray.Console() as c, FixedBeam(c) as fb:
+        mode = fb.info["mode"]
         c.cmd("src tone")
         dev, d = micarray.find_input()
         if dev is None:
@@ -110,7 +149,6 @@ def cmd_tone(seconds):
         print(f"mode {mode}, device '{d['name']}' via {d['hostapi_name']} ({nch} ch), recording {seconds} s ...")
         x = record(dev, d, seconds)
         st = c.cmd("stats")
-        c.cmd("src mics")
     os.makedirs(OUT_DIR, exist_ok=True)
     np.save(os.path.join(OUT_DIR, f"tone_{mode}.npy"), x)
     ok = check_tones(x, mode)
@@ -121,8 +159,8 @@ def cmd_tone(seconds):
 
 
 def cmd_stress(cycles):
-    with micarray.Console() as c:
-        mode = c.cmd("info")["mode"]
+    with micarray.Console() as c, FixedBeam(c) as fb:
+        mode = fb.info["mode"]
         c.cmd("src tone")
         dev, d = micarray.find_input()
         before = c.cmd("stats")
@@ -137,7 +175,6 @@ def cmd_stress(cycles):
         x = record(dev, d, 3)
         ok = check_tones(x, mode) and fails == 0
         after = c.cmd("stats")
-        c.cmd("src mics")
     print(f"  restarts {before['usb_restarts']} -> {after['usb_restarts']}, underruns {after['usb_underruns']}")
     print("STRESS TEST", "PASS" if ok else "FAIL")
     return ok
@@ -147,8 +184,8 @@ def cmd_long(seconds, chunk_s=10.0):
     """One continuous stream for `seconds`, tone-checked in 10 s chunks."""
     import queue
 
-    with micarray.Console() as c:
-        mode = c.cmd("info")["mode"]
+    with micarray.Console() as c, FixedBeam(c) as fb:
+        mode = fb.info["mode"]
         c.cmd("src tone")
         dev, d = micarray.find_input()
         q = queue.Queue()
@@ -170,7 +207,6 @@ def cmd_long(seconds, chunk_s=10.0):
                           f"ring_full={st['usb_ring_full']} dma_overruns={st['dma_overruns']} "
                           f"core1={st['core1_load']:.2f} doa={st['doa_load']:.2f}", flush=True)
         st1 = c.cmd("stats")
-        c.cmd("src mics")
     ok = bad == 0 and st1["usb_underruns"] == st0["usb_underruns"] and st1["dma_overruns"] == st0["dma_overruns"]
     print("LONG TEST", "PASS" if ok else "FAIL", f"({n_chunks} chunks, {bad} with glitches)")
     return ok
