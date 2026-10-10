@@ -7,7 +7,7 @@
 namespace settings {
 
 static constexpr uint32_t MAGIC = 0x4D494341;  // "MICA"
-static constexpr uint16_t VERSION = 1;
+static constexpr uint16_t VERSION = 2;
 static Settings s;
 
 void defaults() {
@@ -25,7 +25,7 @@ void defaults() {
     s.led_rgb[1] = 40;
     s.led_rgb[2] = 80;
     s.az_offset = 0;
-    s.gain_db = 12;
+    s.gain_db = 18;  // speech at 1 m lands near -40 dBFS; clips above ~108 dB SPL
     s.telem_hz = 10;
     s.telem_fmt = TELEM_JSON;
 }

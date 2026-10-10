@@ -28,11 +28,14 @@ def expected_tones(mode):
     return {1: 3500.0}  # stereo: ch1 = beam (mix), ch2 = centre mic
 
 
-def stream_args(channels):
-    """WASAPI exclusive mode: the device's own samples, bypassing the Windows
-    audio engine (mic volume, effects/APOs), in its native format."""
-    dtype = "int16" if channels == 8 else "int32"
-    return dict(samplerate=FS, channels=channels, dtype=dtype, extra_settings=sd.WasapiSettings(exclusive=True))
+def stream_args(dev_info):
+    """The device's own samples in its native format: WDM-KS, or WASAPI
+    exclusive as a fallback (both bypass the Windows audio engine)."""
+    channels = dev_info["max_input_channels"]
+    args = dict(samplerate=FS, channels=channels, dtype="int16" if channels == 8 else "int32")
+    if dev_info.get("hostapi_name") == "Windows WASAPI":
+        args["extra_settings"] = sd.WasapiSettings(exclusive=True)
+    return args
 
 
 def to_float(x):
@@ -40,8 +43,8 @@ def to_float(x):
     return x.astype(np.float32) / (32768.0 if x.dtype == np.int16 else 2147483648.0)
 
 
-def record(dev, seconds, channels):
-    x = sd.rec(int(seconds * FS), device=dev, blocking=True, **stream_args(channels))
+def record(dev, d, seconds):
+    x = sd.rec(int(seconds * FS), device=dev, blocking=True, **stream_args(d))
     return to_float(x)
 
 
@@ -104,8 +107,8 @@ def cmd_tone(seconds):
         if dev is None:
             sys.exit("Sipeed Mic Array input not found")
         nch = d["max_input_channels"]
-        print(f"mode {mode}, device '{d['name']}' ({nch} ch), recording {seconds} s ...")
-        x = record(dev, seconds, nch)
+        print(f"mode {mode}, device '{d['name']}' via {d['hostapi_name']} ({nch} ch), recording {seconds} s ...")
+        x = record(dev, d, seconds)
         st = c.cmd("stats")
         c.cmd("src mics")
     os.makedirs(OUT_DIR, exist_ok=True)
@@ -122,17 +125,16 @@ def cmd_stress(cycles):
         mode = c.cmd("info")["mode"]
         c.cmd("src tone")
         dev, d = micarray.find_input()
-        nch = d["max_input_channels"]
         before = c.cmd("stats")
         fails = 0
         for i in range(cycles):
-            with sd.InputStream(device=dev, **stream_args(nch)) as s:
-                frames, _ = s.read(int(0.4 * FS))
+            # callback stream: WDM-KS has no blocking read in PortAudio
+            frames = sd.rec(int(0.4 * FS), device=dev, blocking=True, **stream_args(d))
             alive = np.abs(to_float(frames)[int(0.15 * FS):]).max() > 0.01
             st = c.cmd("stats", timeout=1.0)
             fails += not alive
             print(f"  cycle {i + 1:2d}: audio {'yes' if alive else 'NO'}  restarts={st['usb_restarts']}")
-        x = record(dev, 3, nch)
+        x = record(dev, d, 3)
         ok = check_tones(x, mode) and fails == 0
         after = c.cmd("stats")
         c.cmd("src mics")

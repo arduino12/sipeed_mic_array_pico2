@@ -16,9 +16,14 @@ struct Control {
     volatile float steer_az = 0.0f;       // core0: beam steering direction (deg)
     volatile bool gate_enabled = false;   // core0
     volatile bool gate_open = true;       // core0: DOA says the steered direction is talking
-    volatile float gain_db = 12.0f;       // core0: digital gain applied to USB audio
+    volatile float gain_db = 18.0f;       // core0: digital gain applied to USB audio
     volatile bool streaming = false;      // USB ISR: host has the audio stream open
-    volatile int i2s_bit_offset = 1;      // core0 (debug): I2S data delay after WS edge
+    // core0 (debug): BCK position of the MSB within a captured slot word. The
+    // datasheet says Philips I2S (MSB one BCK after WS), but raw captures show
+    // the sign bit at position 0 -- either the mic starts early or the
+    // followers' first sample lands one edge late; either way the 24-bit word
+    // (18 significant bits + zero padding) occupies positions 0..23.
+    volatile int i2s_bit_offset = 0;
 };
 
 struct Stats {

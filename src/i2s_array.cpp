@@ -133,6 +133,10 @@ void __not_in_flash_func(read_frame)(uint32_t idx, int32_t out[8], int bit_offse
     }
 }
 
+uint32_t raw_word(uint32_t idx, int line, int right) {
+    return s_ring[line & 3][(idx & (RING_FRAMES - 1)) * 2 + (right ? 1 : 0)];
+}
+
 float clkdiv() { return s_div; }
 
 }  // namespace i2s

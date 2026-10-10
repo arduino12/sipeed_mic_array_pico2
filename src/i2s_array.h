@@ -22,5 +22,7 @@ uint32_t write_frame();
 // (1 for Philips I2S).
 void read_frame(uint32_t idx, int32_t out[8], int bit_offset);
 float clkdiv();
+// Debug: the raw 32-bit slot word (BCK position 0 in bit 31) as captured.
+uint32_t raw_word(uint32_t idx, int line, int right);
 
 }  // namespace i2s

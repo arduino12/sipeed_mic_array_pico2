@@ -51,4 +51,4 @@ constexpr uint8_t LED_BRIGHT_MAX = 31;
 // ---------------------------------------------------------------------------
 constexpr uint16_t USB_VID_MICARRAY = 0x1209;
 constexpr uint16_t USB_PID_STEREO = 0xA6E1;
-constexpr uint16_t USB_PID_RAW8 = 0xA6E2;
+constexpr uint16_t USB_PID_RAW8 = 0xA6E3;  // A6E2 was an early 8-ch layout Windows cached as 2-ch

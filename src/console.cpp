@@ -120,6 +120,16 @@ static void dispatch(char *line) {
         cmd_levels();
     } else if (!strcmp(c, "map")) {
         cmd_map();
+    } else if (!strcmp(c, "raw") && argc == 2) {
+        // raw <slot>: 32 consecutive raw words of one I2S slot, hex
+        int slot = atoi(argv[1]) & 7;
+        uint32_t f = i2s::write_frame() - 40;
+        int n = snprintf(s_out, sizeof(s_out), "{\"ok\":\"raw\",\"slot\":%d,\"words\":[", slot);
+        for (int i = 0; i < 32; ++i)
+            n += snprintf(s_out + n, sizeof(s_out) - n, "%s\"%08lX\"", i ? "," : "",
+                          (unsigned long)i2s::raw_word(f + i, slot >> 1, slot & 1));
+        snprintf(s_out + n, sizeof(s_out) - n, "]}");
+        reply(s_out);
     } else if (!strcmp(c, "bench")) {
         doa::bench(s_out, sizeof(s_out));
         reply(s_out);

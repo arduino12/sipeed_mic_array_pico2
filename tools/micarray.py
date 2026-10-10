@@ -6,7 +6,7 @@ import serial
 import serial.tools.list_ports
 
 VID = 0x1209
-PIDS = {0xA6E1: "stereo", 0xA6E2: "raw8"}
+PIDS = {0xA6E1: "stereo", 0xA6E3: "raw8"}
 RPI_VID = 0x2E8A  # arduino-pico default before our firmware runs
 DEVICE_NAME = "Sipeed Mic Array"
 
@@ -53,16 +53,20 @@ class Console:
         self.close()
 
     def _lines(self):
+        """Parsed lines; each gets "_ht", the host time it was read."""
         self._buf += self.ser.read(4096)
+        now = time.time()
         while b"\n" in self._buf:
             line, self._buf = self._buf.split(b"\n", 1)
             line = line.strip()
             if not line:
                 continue
             try:
-                yield json.loads(line)
+                msg = json.loads(line)
             except ValueError:
-                yield {"raw": line.decode(errors="replace")}
+                msg = {"raw": line.decode(errors="replace")}
+            msg["_ht"] = now
+            yield msg
 
     def pump(self, seconds):
         """Collect telemetry for `seconds`, return the lines received."""
@@ -86,16 +90,29 @@ class Console:
         raise TimeoutError(f"no reply to {line!r}")
 
 
-def find_input(name=DEVICE_NAME, hostapi="Windows WASAPI", timeout=15.0):
-    """The audio endpoint appears a few seconds after the COM port, and
-    PortAudio only scans devices at init, so rescan until it shows up."""
+# WDM-KS talks to the USB audio driver directly: exact device samples, all
+# channels. WASAPI shared mode goes through the Windows audio engine, whose
+# default "Voice Clarity" effect pack narrows the 8-ch endpoint to 2 channels
+# and applies AGC/noise suppression; exclusive mode avoids the effects but
+# PortAudio still caps the channel count at the shared-mode format.
+HOSTAPI_PREFERENCE = ("Windows WDM-KS", "Windows WASAPI")
+
+
+def find_input(name=DEVICE_NAME, hostapis=HOSTAPI_PREFERENCE, timeout=15.0):
+    """Returns (index, device_info) of the mic array, preferring WDM-KS. The
+    audio endpoint appears a few seconds after the COM port, and PortAudio
+    only scans devices at init, so rescan until it shows up."""
     import sounddevice as sd
 
     end = time.time() + timeout
     while True:
-        for i, d in enumerate(sd.query_devices()):
-            if d["max_input_channels"] and name in d["name"] and sd.query_hostapis(d["hostapi"])["name"] == hostapi:
-                return i, d
+        devs = list(enumerate(sd.query_devices()))
+        for api in hostapis:
+            for i, d in devs:
+                if d["max_input_channels"] and name in d["name"] and sd.query_hostapis(d["hostapi"])["name"] == api:
+                    d = dict(d)
+                    d["hostapi_name"] = api
+                    return i, d
         if time.time() >= end:
             return None, None
         time.sleep(1.0)

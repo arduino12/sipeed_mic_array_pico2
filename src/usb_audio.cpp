@@ -34,7 +34,10 @@ public:
         const uint8_t nch = usb_channels(s_mode);
         const uint8_t subslot = s_mode == MODE_RAW8 ? 2 : 4;
         const uint8_t bits = s_mode == MODE_RAW8 ? 16 : 24;
-        const uint32_t chcfg = s_mode == MODE_RAW8 ? AUDIO20_CHANNEL_CONFIG_NON_PREDEFINED
+        // raw8 claims the 7.1 layout (FL FR FC LFE BL BR SL SR): Windows will
+        // not build an 8-channel format for "non-predefined" channels, and the
+        // spatial labels are meaningless here anyway (ch1..6 ring, 7 centre, 8 beam).
+        const uint32_t chcfg = s_mode == MODE_RAW8 ? 0x0000063Fu
                                                     : (AUDIO20_CHANNEL_CONFIG_FRONT_LEFT |
                                                        AUDIO20_CHANNEL_CONFIG_FRONT_RIGHT);
         const uint16_t ep_size = (uint16_t)((FS / 1000 + 1) * nch * subslot);
