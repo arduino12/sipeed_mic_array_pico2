@@ -4,13 +4,28 @@
 #define FW_VERSION "0.2.0"
 
 // ---------------------------------------------------------------------------
-// Pins (Raspberry Pi Pico 2)
+// Pins. Constraints: WS = BCK + 1 (PIO side-set pair); D0..D3 consecutive
+// (one follower SM per line, pin = D0 + line); LED_CK / LED_DA = SPI0 SCK / TX
+// (GP2/6/18/22 and GP3/7/19/23).
 // ---------------------------------------------------------------------------
+#if defined(ARDUINO_WAVESHARE_RP2350_ZERO)
+#define MICARRAY_BOARD "rp2350-zero"
+constexpr unsigned PIN_I2S_BCK = 0;  // MIC_CK
+constexpr unsigned PIN_I2S_WS = 1;   // MIC_WS
+constexpr unsigned PIN_I2S_D0 = 2;   // MIC_D0..D3 on GP2..GP5
+constexpr unsigned PIN_LED_CK = 6;   // SPI0 SCK
+constexpr unsigned PIN_LED_DA = 7;   // SPI0 TX
+#else  // Raspberry Pi Pico 2
+#define MICARRAY_BOARD "pico2"
 constexpr unsigned PIN_I2S_BCK = 10;  // MIC_CK
-constexpr unsigned PIN_I2S_WS = 11;   // MIC_WS -- must be BCK + 1 (PIO side-set pair)
-constexpr unsigned PIN_I2S_D0 = 12;   // MIC_D0..D3 on GP12..GP15 -- one `in pins, 4`
+constexpr unsigned PIN_I2S_WS = 11;   // MIC_WS
+constexpr unsigned PIN_I2S_D0 = 12;   // MIC_D0..D3 on GP12..GP15
 constexpr unsigned PIN_LED_CK = 18;   // SPI0 SCK
 constexpr unsigned PIN_LED_DA = 19;   // SPI0 TX
+#endif
+static_assert(PIN_I2S_WS == PIN_I2S_BCK + 1, "MIC_WS must be the GPIO after MIC_CK");
+static_assert(PIN_LED_CK % 4 == 2 && PIN_LED_DA % 4 == 3 && (PIN_LED_CK / 8) % 2 == 0 && (PIN_LED_DA / 8) % 2 == 0,
+              "LED pins must be SPI0 SCK / TX");
 
 // ---------------------------------------------------------------------------
 // Audio

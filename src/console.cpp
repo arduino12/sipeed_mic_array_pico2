@@ -57,12 +57,12 @@ static void cmd_info() {
     const auto &st = settings::get();
     const bool sector = !st.steer_auto && st.gate;
     snprintf(s_out, sizeof(s_out),
-             "{\"ok\":\"info\",\"fw\":\"%s\",\"mode\":\"%s\",\"src\":\"%s\",\"sys_hz\":%lu,\"pio_div\":%.4f,"
+             "{\"ok\":\"info\",\"fw\":\"%s\",\"board\":\"%s\",\"mode\":\"%s\",\"src\":\"%s\",\"sys_hz\":%lu,\"pio_div\":%.4f,"
              "\"usb_mounted\":%d,\"streaming\":%d,\"steer\":\"%s\",\"steer_az\":%.1f,\"gate\":%d,"
              "\"gate_width\":%.1f,\"sector\":%d,\"sector_from\":%.1f,\"sector_to\":%.1f,\"mute_db\":%.0f,"
              "\"width\":%.0f,\"lookahead_ms\":%u,\"gain_db\":%.1f,\"led\":\"%s\",\"bright\":%u,\"offset\":%.1f,"
              "\"telem_hz\":%u,\"telem_fmt\":\"%s\",\"i2s_bit_offset\":%d}",
-             FW_VERSION, mode_name(g_ctl.mode), src_name(g_ctl.source), (unsigned long)clock_get_hz(clk_sys),
+             FW_VERSION, MICARRAY_BOARD, mode_name(g_ctl.mode), src_name(g_ctl.source), (unsigned long)clock_get_hz(clk_sys),
              i2s::clkdiv(), usb_audio::mounted(), usb_audio::streaming(), st.steer_auto ? "auto" : "fixed",
              st.steer_az, st.gate, st.gate_width, sector, geom::wrap360(st.steer_az - st.gate_width),
              geom::wrap360(st.steer_az + st.gate_width), st.mute_db, st.width, st.lookahead_ms, st.gain_db,

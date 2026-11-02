@@ -26,6 +26,25 @@ Connect the module's J2/J3 headers (names as printed on the board) to the Pico 2
 | VIN | VBUS (5 V) | 40 |
 | GND | GND | 38 |
 
+### Waveshare RP2350-Zero (build env `zero`)
+
+| Module | RP2350-Zero |
+|---|---|
+| MIC_CK | GP0 |
+| MIC_WS | GP1 |
+| MIC_D0–D3 | GP2–GP5 |
+| LED_CK | GP6 |
+| LED_DA | GP7 |
+| VIN | 5V |
+| GND | GND |
+
+### Choosing other pins
+
+Pins live in `src/config.h`, and `static_assert`s check these rules:
+- MIC_WS must be the GPIO right after MIC_CK. The two clocks come from one PIO side-set pair.
+- MIC_D0–D3 must be four consecutive GPIOs in that order. Each line has its own PIO state machine, so they don't need to sit next to the clocks. Scattered pins would need only a small pin table in the code.
+- LED_CK and LED_DA must be SPI0 clock and data-out pins: LED_CK on GP2, 6, 18 or 22, and LED_DA on GP3, 7, 19 or 23.
+
 Power and logic levels:
 - VIN is 5 V. The board has its own 3.3 V regulator for the mics and level shifters on the LED lines, so the Pico's 3.3 V logic is fine.
 - The LED brightness is capped (`led bright`, default 4/31). At full white the ring draws about 720 mA.
@@ -35,8 +54,8 @@ Power and logic levels:
 PlatformIO, run from PowerShell:
 
 ```
-pio run
-python tools\flash.py
+pio run -e pico2              # or: pio run -e zero
+python tools\flash.py pico2   # or: python tools\flash.py zero
 ```
 
 - **First flash:** hold BOOTSEL while plugging in. `flash.py` copies the UF2 to the `RP2350` drive.

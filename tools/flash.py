@@ -1,6 +1,6 @@
 """Flash the firmware by UF2 copy (picotool has no WinUSB driver on this PC).
 
-    python tools/flash.py [path/to/firmware.uf2]
+    python tools/flash.py [pico2|zero|path/to/firmware.uf2]   (default: pico2)
 
 If no RP2350 drive is mounted, the board is put into BOOTSEL with the 1200 bps
 touch first. Waits for the board to come back and prints its COM port.
@@ -18,7 +18,13 @@ sys.path.insert(0, os.path.dirname(__file__))
 import micarray  # noqa: E402
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DEFAULT_UF2 = os.path.join(ROOT, ".pio", "build", "pico2", "firmware.uf2")
+
+
+def uf2_path(arg):
+    """A PlatformIO env name (pico2, zero) or a UF2 file."""
+    if arg.lower().endswith(".uf2"):
+        return arg
+    return os.path.join(ROOT, ".pio", "build", arg, "firmware.uf2")
 
 
 def find_drive(label="RP2350"):
@@ -44,9 +50,9 @@ def wait_for(fn, timeout):
 
 
 def main():
-    uf2 = sys.argv[1] if len(sys.argv) > 1 else DEFAULT_UF2
+    uf2 = uf2_path(sys.argv[1] if len(sys.argv) > 1 else "pico2")
     if not os.path.exists(uf2):
-        sys.exit(f"missing {uf2} -- run `pio run` first")
+        sys.exit(f"missing {uf2} -- run `pio run -e <env>` first")
     drive = find_drive()
     if not drive:
         port = micarray.find_port()
