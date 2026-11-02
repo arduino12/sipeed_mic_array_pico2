@@ -109,7 +109,10 @@ Telemetry, default 10 Hz:
 
 ## Browser GUI
 
-Open `web/index.html` in Chrome or Edge, then press **Connect** and pick the mic array. If the browser blocks the `file://` page, serve it locally with `python -m http.server` in `web/` and open `localhost:8000`.
+**Online:** https://arduino12.github.io/sipeed_mic_array_gui/ — open it in Chrome or Edge on any computer, press **Connect** and pick the mic array. Web Serial runs only in Chromium browsers.
+The page is served by GitHub Pages from the GUI-only repo `arduino12/sipeed_mic_array_gui`. After changing `web/`, commit and republish it with `git subtree push --prefix web gui main`.
+
+**Offline:** open `web/index.html` directly. If the browser blocks the `file://` page, serve it locally with `python -m http.server` in `web/` and open `localhost:8000`.
 
 The GUI provides:
 - A live compass showing the LEDs, the mics, the SRP map, the direction needle, and the beam/gate wedge. Clicking the compass steers the beam.
