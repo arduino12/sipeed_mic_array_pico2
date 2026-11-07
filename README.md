@@ -109,8 +109,8 @@ Telemetry, default 10 Hz:
 
 ## Browser GUI
 
-**Online:** https://arduino12.github.io/sipeed_mic_array_gui/ — open it in Chrome or Edge on any computer, press **Connect** and pick the mic array. Web Serial runs only in Chromium browsers.
-The page is served by GitHub Pages from the GUI-only repo `arduino12/sipeed_mic_array_gui`. After changing `web/`, commit and republish it with `git subtree push --prefix web gui main`.
+**Online:** https://arduino12.github.io/sipeed_mic_array_pico2/ — open it in Chrome or Edge on any computer, press **Connect** and pick the mic array. Web Serial runs only in Chromium browsers.
+GitHub Pages serves the `web/` folder of this repo. A push to `master` that changes `web/` republishes it (`.github/workflows/pages.yml`).
 
 **Offline:** open `web/index.html` directly. If the browser blocks the `file://` page, serve it locally with `python -m http.server` in `web/` and open `localhost:8000`.
 
